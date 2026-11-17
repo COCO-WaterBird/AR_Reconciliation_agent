@@ -279,8 +279,32 @@ The response must be a single JSON object with a fixed schema:
 }
 ```
 
+### Structured output negotiation
+
+The backend probes the endpoint once at startup to find out whether it honours a
+`json_schema` response format.
+
+- **If it does**, the schema is enforced by the decoder's grammar. The model
+  physically cannot emit a value outside the controlled vocabulary, or a key that
+  is not in the schema. This is what makes a small local model reliable.
+- **If it does not**, the backend falls back to `{"type": "json_object"}`, which
+  at least guarantees a parsable JSON object, and relies on the validator.
+
+See [Free and Open-Source Model Backends](local_models.md) for the measured
+behaviour on a local model.
+
+### Parallelism
+
+`--concurrency N` analyses N receipts at a time. The requests are I/O bound while
+the model generates, so a small thread pool cuts the wall clock sharply on a
+local model. Each receipt is still a separate call, so the reasoning for every
+receipt stays individually auditable.
+
+### Failure handling
+
 If the call fails, the agent logs the error and falls back to the rules backend
-for that receipt, so one bad response cannot stop the run.
+for that receipt, so one bad response cannot stop the run. Every fallback is
+recorded in the `AI Exception Log` sheet.
 
 ---
 

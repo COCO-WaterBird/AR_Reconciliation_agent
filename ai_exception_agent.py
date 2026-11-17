@@ -54,10 +54,13 @@ import json
 import os
 import re
 import sys
+import threading
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any, Iterable, Sequence
+
+from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 
@@ -683,19 +686,76 @@ def build_user_prompt(context: ExceptionContext) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Structured output schema
+# ---------------------------------------------------------------------------
+
+# A JSON Schema for the answer.  Backends that support grammar-constrained
+# decoding (Ollama, llama.cpp, vLLM with guided decoding) use this to make an
+# off-schema answer impossible rather than merely unlikely.  Backends that do
+# not support it fall back to a plain "respond with JSON" instruction.
+RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "exception_type": {"type": "string", "enum": list(EXCEPTION_TYPES)},
+        "root_cause": {"type": "string"},
+        "recommended_action": {"type": "string", "enum": list(RECOMMENDED_ACTIONS)},
+        "confidence": {"type": "string", "enum": list(CONFIDENCE_LEVELS)},
+        "proposed_invoices": {"type": "array", "items": {"type": "string"}},
+        "proposed_amount": {"type": "number"},
+        "proposed_residual": {"type": "number"},
+        "accounting_treatment": {"type": "string"},
+        "gl_posting": {"type": "string"},
+        "explanation": {"type": "string"},
+    },
+    "required": [
+        "exception_type",
+        "root_cause",
+        "recommended_action",
+        "confidence",
+        "proposed_invoices",
+        "proposed_amount",
+        "proposed_residual",
+        "accounting_treatment",
+        "gl_posting",
+        "explanation",
+    ],
+    "additionalProperties": False,
+}
+
+
+# ---------------------------------------------------------------------------
 # LLM backend
 # ---------------------------------------------------------------------------
 
 class LLMBackend:
-    """OpenAI-compatible chat-completions backend."""
+    """
+    OpenAI-compatible chat-completions backend.
+
+    Works with OpenAI, Azure OpenAI, Ollama, LM Studio, vLLM, llama.cpp's
+    server and any other endpoint that speaks the OpenAI chat API.
+
+    Two levels of structured output are used, because local models drift off a
+    schema much more often than hosted ones:
+
+      1. ``response_format={"type": "json_schema", ...}`` is used when the
+         endpoint advertises support for it.  The model is then constrained by
+         the grammar, so it cannot emit a value outside the controlled
+         vocabulary or a key that is not in the schema.
+      2. Otherwise ``response_format={"type": "json_object"}`` is used, which
+         at least guarantees a parsable JSON object.
+
+    A local endpoint that silently ignores ``json_schema`` is detected by
+    probing it once, and the backend falls back to the plain JSON mode.
+    """
 
     def __init__(
         self,
         api_key: str,
         model: str,
         base_url: str | None = None,
-        timeout: float = 60.0,
+        timeout: float = 300.0,
         max_retries: int = 3,
+        disable_thinking: bool = False,
     ) -> None:
         try:
             from openai import OpenAI
@@ -710,18 +770,97 @@ class LLMBackend:
             kwargs["base_url"] = base_url
         self._client = OpenAI(**kwargs)
         self.model = model
+        self._supports_json_schema: bool | None = None
+        # The probe is a one-off request that costs a full model round trip, so
+        # it must run exactly once even when the receipts are analysed in
+        # parallel.  Without the lock, every worker thread would fire its own
+        # probe on the first batch.
+        self._probe_lock = threading.Lock()
+        # The qwen3 family enables a "thinking" mode by default.  It is slower
+        # and, with a grammar-constrained decoder, it competes with the
+        # constraint for the token budget.  Turning it off is worthwhile for a
+        # structured extraction task like this one.
+        self._extra_body: dict[str, Any] = {"think": False} if disable_thinking else {}
+
+    # -- structured output negotiation -------------------------------------
+
+    def _probe_json_schema_support(self) -> bool:
+        """
+        Find out whether the endpoint honours a json_schema response format.
+
+        The probe is a throwaway request with a tiny schema.  A local endpoint
+        that does not understand the format either errors out or returns
+        something that does not match the schema.
+
+        The result is cached, and the probe is guarded by a lock so that
+        parallel analysis does not fire one probe per worker thread.
+        """
+        if self._supports_json_schema is not None:
+            return self._supports_json_schema
+
+        with self._probe_lock:
+            # Another thread may have completed the probe while this one
+            # waited for the lock.
+            if self._supports_json_schema is not None:
+                return self._supports_json_schema
+
+            probe_schema = {
+                "type": "object",
+                "properties": {"ok": {"type": "boolean"}},
+                "required": ["ok"],
+                "additionalProperties": False,
+            }
+            try:
+                response = self._client.chat.completions.create(
+                    model=self.model,
+                    temperature=0,
+                    max_tokens=16,
+                    messages=[{"role": "user", "content": "Return {\"ok\": true}."}],
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "probe",
+                            "strict": True,
+                            "schema": probe_schema,
+                        },
+                    },
+                )
+                content = (response.choices[0].message.content or "").strip()
+                parsed = parse_json_object(content)
+                self._supports_json_schema = parsed.get("ok") is True
+            except Exception:
+                self._supports_json_schema = False
+
+        return self._supports_json_schema
+
+    def _response_format(self) -> dict[str, Any]:
+        if self._probe_json_schema_support():
+            return {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "ar_exception_analysis",
+                    "strict": True,
+                    "schema": RESPONSE_SCHEMA,
+                },
+            }
+        return {"type": "json_object"}
+
+    # -- analysis ----------------------------------------------------------
 
     def analyse(self, context: ExceptionContext) -> dict[str, Any]:
         """Send one receipt to the model and return the parsed JSON object."""
-        response = self._client.chat.completions.create(
-            model=self.model,
-            temperature=0,
-            messages=[
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "temperature": 0,
+            "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": build_user_prompt(context)},
             ],
-            response_format={"type": "json_object"},
-        )
+            "response_format": self._response_format(),
+        }
+        if self._extra_body:
+            kwargs["extra_body"] = self._extra_body
+        response = self._client.chat.completions.create(**kwargs)
         content = response.choices[0].message.content or "{}"
         return parse_json_object(content)
 
@@ -1168,7 +1307,7 @@ def validate_recommendation(
     # The residual is recomputed from the actual open amounts rather than
     # trusted from the model, so the figure in the review sheet is always
     # consistent with the AR data.
-    if proposed_invoices:
+    if proposed_invoices and proposed_amount_cents > 0:
         computed_residual = max(
             sum(valid_invoice_numbers[i.upper()].open_amount_cents for i in proposed_invoices)
             - proposed_amount_cents,
@@ -1181,6 +1320,8 @@ def validate_recommendation(
             )
             proposed_residual_cents = computed_residual
     else:
+        # Nothing is being applied, so there is no residual to report.  The
+        # whole balance of the named invoices simply stays open.
         proposed_residual_cents = 0
 
     # --- Consistency between confidence, action and evidence ---
@@ -1466,6 +1607,9 @@ def analyse_exceptions(
     model: str = "gpt-4o",
     base_url: str | None = None,
     api_key: str | None = None,
+    concurrency: int = 1,
+    limit: int = 0,
+    disable_thinking: bool = False,
     verbose: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, list[dict[str, Any]]]:
     """
@@ -1481,6 +1625,9 @@ def analyse_exceptions(
     unmatched_df = pd.read_excel(result_path, sheet_name="Unmatched Bank Receipts")
     ar_df = pd.read_excel(result_path, sheet_name="Reconciled Open AR")
 
+    if limit > 0:
+        unmatched_df = unmatched_df.head(limit)
+
     backend = None
     if backend_name == "llm":
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
@@ -1490,7 +1637,12 @@ def analyse_exceptions(
                 "deterministic analyzer instead."
             )
         base_url = base_url or os.environ.get("OPENAI_BASE_URL")
-        backend = LLMBackend(api_key=api_key, model=model, base_url=base_url)
+        backend = LLMBackend(
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            disable_thinking=disable_thinking,
+        )
         engine_label = f"LLM ({model})"
     else:
         engine_label = "Rules (deterministic)"
@@ -1514,16 +1666,18 @@ def analyse_exceptions(
     review_rows: list[dict[str, Any]] = []
     log_rows: list[dict[str, Any]] = []
 
-    for _, unmatched_row in unmatched_df.iterrows():
+    def analyse_one(unmatched_row: pd.Series) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+        """Analyse one unmatched receipt.  Returns the review row and the log rows."""
+        local_log: list[dict[str, Any]] = []
         txn_id = normalize_text(unmatched_row.get(BANK_TRANSACTION_ID_COL, ""))
         bank_row = bank_lookup.get(normalize_key(txn_id))
         if bank_row is None:
-            log_rows.append({
+            local_log.append({
                 "Bank Transaction ID": txn_id,
                 "Outcome": "Skipped",
                 "Detail": "Receipt is not present in the processed bank receipts sheet.",
             })
-            continue
+            return None, local_log
 
         context = build_context(bank_row, unmatched_row, ar_df, already_matched)
 
@@ -1532,7 +1686,7 @@ def analyse_exceptions(
                 raw = backend.analyse(context)
                 source = engine_label
             except Exception as exc:
-                log_rows.append({
+                local_log.append({
                     "Bank Transaction ID": txn_id,
                     "Outcome": "Model Error",
                     "Detail": f"{type(exc).__name__}: {exc}. Fell back to the rules analyzer.",
@@ -1547,13 +1701,13 @@ def analyse_exceptions(
         recommendation.analysed_by = source
 
         for note in recommendation.validation_notes:
-            log_rows.append({
+            local_log.append({
                 "Bank Transaction ID": txn_id,
                 "Outcome": "Validation",
                 "Detail": note,
             })
 
-        review_rows.append({
+        review_row = {
             REVIEW_BANK_TXN_COL: recommendation.bank_transaction_id,
             REVIEW_EXCEPTION_TYPE_COL: recommendation.exception_type,
             REVIEW_ROOT_CAUSE_COL: recommendation.root_cause,
@@ -1570,7 +1724,31 @@ def analyse_exceptions(
             REVIEW_APPROVAL_COL: "",
             REVIEW_REVIEWER_NOTES_COL: "",
             REVIEW_APPLIED_COL: "No",
-        })
+        }
+        return review_row, local_log
+
+    # --- Run the analysis, optionally in parallel ---
+    #
+    # A local model on a laptop takes 20-50 seconds per receipt, so the 64
+    # unmatched receipts take a while.  A thread pool shortens that
+    # considerably on a local server, because the requests are I/O bound while
+    # the model is generating.  The rules backend is fast enough that it stays
+    # single threaded.
+    unmatched_rows = list(unmatched_df.iterrows())
+
+    if backend is not None and concurrency > 1:
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            results = list(pool.map(lambda pair: analyse_one(pair[1]), unmatched_rows))
+        for review_row, local_log in results:
+            if review_row is not None:
+                review_rows.append(review_row)
+            log_rows.extend(local_log)
+    else:
+        for _, unmatched_row in unmatched_rows:
+            review_row, local_log = analyse_one(unmatched_row)
+            if review_row is not None:
+                review_rows.append(review_row)
+            log_rows.extend(local_log)
 
     review_df = pd.DataFrame(review_rows)
     log_df = pd.DataFrame(log_rows)
@@ -1584,10 +1762,10 @@ def analyse_exceptions(
     # unchanged.  If the recommendation moved to a different invoice or a
     # different amount, the old approval no longer applies and the row is
     # sent back for review.
-    existing_approvals = read_existing_approvals(result_path)
-    if existing_approvals:
+    ledger_path = read_existing_approvals(result_path)
+    if ledger_path:
         for index, row in review_df.iterrows():
-            previous = existing_approvals.get(normalize_key(row[REVIEW_BANK_TXN_COL]))
+            previous = ledger_path.get(normalize_key(row[REVIEW_BANK_TXN_COL]))
             if previous is None:
                 continue
             same_proposal = (
@@ -1644,9 +1822,11 @@ def read_existing_approvals(result_path: Path) -> dict[str, dict[str, Any]]:
             workbook_approvals = {}
 
     ledger_approvals: dict[str, dict[str, Any]] = {}
-    if APPROVAL_LEDGER_FILE.exists():
+    if approval_ledger_path(result_path).exists():
         try:
-            ledger_approvals = collect(pd.read_excel(APPROVAL_LEDGER_FILE, sheet_name=REVIEW_SHEET))
+            ledger_approvals = collect(
+                pd.read_excel(approval_ledger_path(result_path), sheet_name=REVIEW_SHEET)
+            )
         except Exception:
             ledger_approvals = {}
 
@@ -1659,14 +1839,27 @@ def read_existing_approvals(result_path: Path) -> dict[str, dict[str, Any]]:
     return approvals
 
 
-def write_approval_ledger(review_df: pd.DataFrame) -> None:
+def approval_ledger_path(result_path: Path) -> Path:
+    """
+    The ledger path that belongs to a result workbook.
+
+    The ledger sits next to the workbook it describes, so a run against a
+    copy of the workbook in a temporary directory does not overwrite the real
+    ledger.
+    """
+    return result_path.parent / APPROVAL_LEDGER_FILE.name
+
+
+def write_approval_ledger(review_df: pd.DataFrame, ledger_path: Path | None = None) -> None:
     """
     Persist the review sheet, including the reviewer's decisions, to the
     sidecar ledger so it survives a re-run of the reconciliation engine.
+
+    The ledger lives next to the result workbook, so a run against a copy of
+    the workbook does not overwrite the real ledger.
     """
-    with pd.ExcelWriter(
-        APPROVAL_LEDGER_FILE, engine="openpyxl", mode="w"
-    ) as writer:
+    target = ledger_path or APPROVAL_LEDGER_FILE
+    with pd.ExcelWriter(target, engine="openpyxl", mode="w") as writer:
         review_df.to_excel(writer, index=False, sheet_name=REVIEW_SHEET)
 
 
@@ -1718,6 +1911,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="API key for the LLM backend (default: the OPENAI_API_KEY environment variable)",
     )
     parser.add_argument(
+        "--no-think",
+        dest="disable_thinking",
+        action="store_true",
+        help="Disable the reasoning mode of the qwen3 family of models. It is slower "
+        "and competes with the schema constraint for the token budget.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Analyse only the first N unmatched receipts (0 = all). Useful for a "
+        "smoke test against a local model.",
+    )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="Number of receipts to analyse in parallel. Useful with a local model, "
+        "where each receipt takes 20-50 seconds (default: %(default)s)",
+    )
+    parser.add_argument(
         "--apply-approved",
         action="store_true",
         help="Apply the recommendations approved in the review sheet (Approval = APPROVE) "
@@ -1739,6 +1953,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         model=args.model,
         base_url=args.base_url,
         api_key=args.api_key,
+        concurrency=max(1, args.concurrency),
+        limit=max(0, args.limit),
+        disable_thinking=args.disable_thinking,
     )
 
     if review_df.empty:
@@ -1763,9 +1980,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"  {exception_type:<28} {count}")
 
     write_review_sheet(args.result, review_df, log_df)
-    write_approval_ledger(review_df)
+    write_approval_ledger(review_df, approval_ledger_path(args.result))
     print(f"\nWrote '{REVIEW_SHEET}' and '{REVIEW_LOG_SHEET}' to {args.result.name}")
-    print(f"Review ledger saved to {APPROVAL_LEDGER_FILE.name}")
+    print(f"Review ledger saved to {approval_ledger_path(args.result).name}")
 
     if not args.apply_approved:
         print(

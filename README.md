@@ -151,6 +151,7 @@ written back to AR after a human sets `Approval = APPROVE` in the review sheet.
 .
 ├── auto_reconcile_na.py            # Deterministic reconciliation engine
 ├── ai_exception_agent.py           # AI exception resolution agent
+├── run_local_model.py              # Convenience wrapper for a local (free) model
 ├── test_llm_backend.py             # Offline test for the LLM code path
 ├── Bank_Cash_Receipts.xlsx         # Input (read-only): 200 bank receipts
 ├── Open_AR_Detail.xlsx             # Input (read-only): 191 open AR rows
@@ -161,6 +162,7 @@ written back to AR after a human sets `Approval = APPROVE` in the review sheet.
 │   ├── reconciliation_logic.md
 │   ├── scenario_coverage.md
 │   ├── ai_exception_agent.md
+│   ├── local_models.md
 │   └── prompt.md
 ├── archive/                        # Superseded working copies
 ├── .gitignore
@@ -209,14 +211,15 @@ python ai_exception_agent.py
 # LLM backend
 OPENAI_API_KEY=sk-... python ai_exception_agent.py --backend llm --model gpt-4o
 
-# Local model (Ollama / LM Studio / vLLM)
-python ai_exception_agent.py --backend llm \
-    --base-url http://localhost:11434/v1 \
-    --model llama3.1 --api-key ollama
+# Local model (Ollama / LM Studio / vLLM) — free and offline
+python run_local_model.py --model qwen2.5:7b
 ```
 
 The agent writes an `AI Exception Review` sheet and an `AI Exception Log` sheet
 into the result workbook, plus a durable `AI_Exception_Approvals.xlsx` ledger.
+
+See [Free and Open-Source Model Backends](docs/local_models.md) for the local
+model setup, model selection and privacy notes.
 
 ### 4. Review and approve
 
@@ -344,12 +347,26 @@ For each unmatched receipt it produces a structured judgement:
 
 - **`rules`** — a deterministic, offline heuristic analyzer. It is the default, so
   the pipeline runs and is testable with no API key and no network access.
-- **`llm`** — an OpenAI-compatible chat-completions endpoint (OpenAI, Azure OpenAI,
-  Ollama, LM Studio, vLLM, DeepSeek). The model receives the receipt, its memo and
-  the candidate open invoices, and returns a structured JSON judgement.
+- **`llm`** — an OpenAI-compatible chat-completions endpoint. This works with
+  hosted APIs (OpenAI, Azure) and with **free local models** (Ollama, LM Studio,
+  llama.cpp, vLLM). The model receives the receipt, its memo and the candidate
+  open invoices, and returns a structured JSON judgement.
 
 Both backends run through the **same validator**, so the safety guarantees do not
 depend on which one is used.
+
+### Structured output
+
+The agent negotiates a grammar-constrained response format. Where the endpoint
+supports `json_schema` (Ollama, llama.cpp, vLLM, OpenAI), the decoder itself
+prevents an off-schema answer — the model physically cannot emit a value outside
+the controlled vocabulary. Endpoints without that support fall back to plain JSON
+mode, and the validator covers the difference.
+
+This matters most for local models: a 7B model without the constraint tends to
+echo the input back instead of answering.
+
+See [Free and Open-Source Model Backends](docs/local_models.md).
 
 ### The validator
 
@@ -475,6 +492,7 @@ Potential use cases include:
 
 - [Reconciliation Logic](docs/reconciliation_logic.md) — matching rules, output statuses, match methods
 - [AI Exception Agent](docs/ai_exception_agent.md) — the agent's design, safety rules and review workflow
+- [Free and Open-Source Model Backends](docs/local_models.md) — running the agent on a free local model
 - [Data Dictionary](docs/data_dictionary.md) — every input and output column
 - [Scenario Coverage](docs/scenario_coverage.md) — S01–S40 scenario reference and measured baseline
 - [Prompt](docs/prompt.md) — the original automation specification

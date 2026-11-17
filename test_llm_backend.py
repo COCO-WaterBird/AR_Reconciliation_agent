@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import ai_exception_agent as A
@@ -28,10 +29,21 @@ class FakeHandler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(length) or b"{}")
         FakeHandler.received.append(body)
 
-        # The canned answer deliberately contains a field the validator must
-        # reject (an invoice that is not in the candidate pool) and an amount
-        # that is too large, so the test proves the validator repairs the
-        # model rather than trusting it.
+        # The backend probes the endpoint once to find out whether it honours
+        # a json_schema response format.  Answer the probe correctly so the
+        # backend takes its schema-constrained path.
+        response_format = body.get("response_format", {})
+        if response_format.get("type") == "json_schema":
+            schema = response_format.get("json_schema", {}).get("schema", {})
+            if schema.get("properties", {}).get("ok") is not None:
+                self._respond({"ok": True})
+                return
+
+        # The canned answer deliberately contains fields the validator must
+        # reject (an invoice that is not in the candidate pool, an amount that
+        # is too large, a residual that disagrees with the AR data) and an
+        # action the scenario forbids, so the test proves the validator
+        # repairs the model rather than trusting it.
         answer = {
             "exception_type": "Short Payment",
             "root_cause": "The payer withheld a freight claim deduction.",
@@ -44,12 +56,14 @@ class FakeHandler(BaseHTTPRequestHandler):
             "gl_posting": "Dr Bank / Cr AR",
             "explanation": "Test answer.",
         }
+        self._respond(answer)
 
+    def _respond(self, answer: dict) -> None:
         payload = {
             "id": "chatcmpl-test",
             "object": "chat.completion",
             "created": 0,
-            "model": body.get("model", "test-model"),
+            "model": "test-model",
             "choices": [
                 {
                     "index": 0,
@@ -85,7 +99,6 @@ def main() -> int:
         model="test-model",
         base_url=f"http://127.0.0.1:{port}/v1",
     )
-
     context = A.ExceptionContext(
         bank_transaction_id="BTRX-999999",
         value_date="2026-06-01",
@@ -146,18 +159,50 @@ def main() -> int:
         failures.append("a scenario the engine marked review-only was auto-matched")
 
     # The request that was sent must contain the receipt and the candidates.
-    if not FakeHandler.received:
-        failures.append("no request reached the fake endpoint")
+    # The first request is the schema probe, so the analysis request is the
+    # one that mentions the receipt.
+    analysis_requests = [
+        request
+        for request in FakeHandler.received
+        if "BTRX-999999" in " ".join(str(m.get("content", "")) for m in request.get("messages", []))
+    ]
+    if not analysis_requests:
+        failures.append("no analysis request reached the fake endpoint")
     else:
-        sent = FakeHandler.received[0]
+        sent = analysis_requests[0]
         messages = sent.get("messages", [])
         user_content = " ".join(str(m.get("content", "")) for m in messages)
-        if "BTRX-999999" not in user_content:
-            failures.append("the receipt id was not sent to the model")
         if "INV-900175" not in user_content:
             failures.append("the candidate invoice was not sent to the model")
-        if sent.get("response_format", {}).get("type") != "json_object":
-            failures.append("the request did not ask for a JSON object response")
+        # The endpoint must be asked for a constrained, structured response.
+        response_format = sent.get("response_format", {})
+        if response_format.get("type") not in {"json_object", "json_schema"}:
+            failures.append("the request did not ask for a structured response")
+
+    # --- The schema probe must fire exactly once ---
+    #
+    # The probe is a full model round trip.  When the receipts are analysed in
+    # parallel, every worker thread would otherwise fire its own probe on the
+    # first batch, which wastes time and can confuse the endpoint.
+    FakeHandler.received.clear()
+    parallel_backend = A.LLMBackend(
+        api_key="test-key",
+        model="test-model",
+        base_url=f"http://127.0.0.1:{port}/v1",
+    )
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(parallel_backend.analyse, [context] * 4))
+
+    probes = [
+        request
+        for request in FakeHandler.received
+        if request.get("response_format", {}).get("type") == "json_schema"
+        and request.get("response_format", {}).get("json_schema", {}).get("name") == "probe"
+    ]
+    if len(probes) != 1:
+        failures.append(
+            f"the schema probe fired {len(probes)} times under concurrency, expected exactly 1"
+        )
 
     server.shutdown()
 
