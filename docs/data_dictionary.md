@@ -109,6 +109,14 @@ The automation creates a new workbook instead of overwriting the source files.
 | Unmatched Bank Receipts | Bank receipts that could not be auto-matched or were routed to exception review. |
 | Data Quality Checks | Data quality issues found in the AR data, such as closed or reconciled invoices with non-zero open amount. |
 | Summary | Key run metrics such as matched receipts, matched invoices, pending review receipts, exceptions, and data quality issue count. |
+| AI Exception Review | Written by `ai_exception_agent.py`. One row per unmatched receipt with the agent's exception type, root cause, recommended action, confidence, proposed invoices and amounts, accounting treatment, proposed GL posting, explanation, and the reviewer's `Approval` decision. |
+| AI Exception Log | Written by `ai_exception_agent.py`. One row per validation repair, model error or apply outcome, so every change the agent made to a recommendation is auditable. |
+
+### File: `AI_Exception_Approvals.xlsx`
+
+| Sheet Name | Description |
+|---|---|
+| AI Exception Review | The durable copy of the review sheet, including the reviewer's approval decisions. It survives a re-run of `auto_reconcile_na.py`, which regenerates the result workbook. See [AI Exception Agent](ai_exception_agent.md). |
 
 ## 4. Key Business Definitions
 

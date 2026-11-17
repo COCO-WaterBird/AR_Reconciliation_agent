@@ -143,3 +143,28 @@ Notes on specific scenarios:
 | S10 Multiple Receipts to One Invoice | The invoice accumulates `Applied Amount` across receipts and is `Reconciled` once the balance reaches zero. |
 | S15 Missing ERP Customer ID | Matched through a controlled customer-name fallback when the name resolves to exactly one ERP customer. |
 | S22 Parent-Child | The parent ERP Customer ID is resolved to the child customer through `Parent Customer ID`, and the memo must still name the child invoice. |
+
+## AI Exception Analysis Baseline
+
+`ai_exception_agent.py` analyses the 64 unmatched receipts with its deterministic
+`rules` backend:
+
+| Recommended action | Receipts |
+|---|---|
+| Manual Review | 40 |
+| Hold / Escalate | 18 |
+| Recommend Match | 4 |
+| Return to Customer | 2 |
+
+| Confidence | Receipts |
+|---|---|
+| Medium | 10 |
+| Low | 54 |
+
+The four `Recommend Match` receipts are the only ones where the agent could name a
+specific invoice with a defensible amount. They still require a human approval
+before they are applied to AR. Every other receipt either has no plausible
+invoice, or needs an accounting treatment decision rather than a match.
+
+See [AI Exception Agent](ai_exception_agent.md) for the design and the safety
+rules.

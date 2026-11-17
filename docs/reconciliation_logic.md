@@ -39,6 +39,15 @@ Expected output sheets:
 | Data Quality Checks | AR data quality issues identified during processing. |
 | Summary | Run-level metrics and output file name. |
 
+`ai_exception_agent.py` adds two more sheets to the same workbook:
+
+| Sheet Name | Purpose |
+|---|---|
+| AI Exception Review | The agent's recommendation for each unmatched receipt, plus the reviewer's approval decision. |
+| AI Exception Log | Every validation repair, model error and apply outcome. |
+
+See [AI Exception Agent](ai_exception_agent.md) for the design.
+
 ## 3. Core Amount Logic
 
 The automation distinguishes between AR clearing and bank cash reconciliation.
@@ -386,7 +395,21 @@ The `Summary` sheet should include the following run metrics:
 | Reconciled control difference | Difference between the two control totals. Must be zero. |
 | Output file | Name of the generated output workbook. |
 
-## 13. Limitations and Future Enhancements
+## 13. Exception Analysis and Human Approval
+
+The deterministic engine leaves every receipt it cannot prove unmatched. Those
+receipts are then analysed by `ai_exception_agent.py`, which classifies the
+exception, explains the root cause and recommends a next action.
+
+The agent is assistive, not authoritative. Its recommendations are written to the
+`AI Exception Review` sheet and are only applied to AR after a human sets
+`Approval = APPROVE` and the run is repeated with `--apply-approved`. The write-back
+is idempotent and the control totals are re-verified afterwards.
+
+See [AI Exception Agent](ai_exception_agent.md) for the full design, the
+controlled vocabularies and the validator rules.
+
+## 14. Limitations and Future Enhancements
 
 This project is a local Excel-based automation demo. In a production corporate finance environment, additional controls would normally be added.
 
@@ -395,10 +418,9 @@ Potential future enhancements:
 1. ERP API integration.
 2. Bank feed API integration.
 3. Customer alias and DBA master data table.
-4. Parent-child customer hierarchy matching.
-5. Multi-currency FX rate table.
-6. Tax withholding rules by country and customer.
-7. Approval workflow for write-offs.
-8. User interface for reviewing exceptions.
-9. Audit log with run timestamp and user ID.
-10. Automated unit tests for each scenario ID from S01 to S40.
+4. Multi-currency FX rate table.
+5. Tax withholding rules by country and customer.
+6. Approval workflow for write-offs.
+7. Audit log with run timestamp and user ID.
+8. Automated unit tests for each scenario ID from S01 to S40.
+9. A general ledger posting service that consumes the agent's proposed postings.
