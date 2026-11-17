@@ -105,3 +105,41 @@ A successful test run should show that:
 6. Partial payments remain open with a residual balance.
 7. High-risk scenarios are routed to `Pending Review` or `Exception` instead of being auto-closed.
 8. Data quality issues are captured separately in the `Data Quality Checks` sheet.
+9. The AR and bank control totals agree, and the control difference is zero.
+
+## Verified Baseline
+
+The following baseline was produced by running the automation against the
+sample data in this repository (`Open_AR_Detail_Reconciled_Result.xlsx`):
+
+| Metric | Value |
+|---|---|
+| Bank receipt rows processed | 200 |
+| Matched bank receipts | 136 |
+| Matched AR invoice rows | 158 |
+| Pending review receipts | 67 |
+| Unmatched / exception receipts | 64 |
+| Data quality issues | 0 |
+| Reconciled control difference | 0.00 |
+
+Scenario outcomes after processing:
+
+| Outcome | Rows |
+|---|---|
+| Reconciled | 103 |
+| Pending Review | 83 |
+| Exception | 14 |
+
+The 14 exceptions are receipts whose scenario is intentionally ambiguous: they
+have no usable memo invoice reference, several open invoices of a plausible
+amount, and a residual too large to apply safely. They are routed to manual
+review rather than matched on a guess.
+
+Notes on specific scenarios:
+
+| Scenario | Behaviour |
+|---|---|
+| S05 Bank Fee | The referenced invoice equals the **net** amount, so AR is cleared at net cash and the fee is flagged for GL review. |
+| S10 Multiple Receipts to One Invoice | The invoice accumulates `Applied Amount` across receipts and is `Reconciled` once the balance reaches zero. |
+| S15 Missing ERP Customer ID | Matched through a controlled customer-name fallback when the name resolves to exactly one ERP customer. |
+| S22 Parent-Child | The parent ERP Customer ID is resolved to the child customer through `Parent Customer ID`, and the memo must still name the child invoice. |

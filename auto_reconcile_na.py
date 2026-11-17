@@ -97,6 +97,34 @@ ROUNDING_TOLERANCE_CENTS         = 2
 SMALL_RESIDUAL_WRITE_OFF_CENTS   = 500
 MAX_CANDIDATES_PER_BANK_RECEIPT  = 80
 
+# Maximum residual (as a ratio of the referenced AR total) that may be applied
+# for scenarios where a residual is a legitimate business outcome.  A residual
+# larger than this means the memo probably points at a different invoice and
+# must not be silently applied.
+MAX_PARTIAL_RESIDUAL_RATIO      = 0.10
+MIN_PARTIAL_RESIDUAL_CENTS       = 100    # 1.00 absolute floor
+
+# Scenarios where a partial / residual application is a valid business outcome.
+# For these, the memo invoice reference is allowed to differ from the receipt
+# amount and the residual is reported rather than treated as a mismatch.
+PARTIAL_ALLOWANCE_SCENARIOS = {
+    "Short Payment",
+    "Overpayment",
+    "Partial Payment",
+    "Installment",
+    "Small Residual Write-Off",
+    "Sales Tax Adjustment",
+}
+
+# Scenarios where the memo names the invoice explicitly and the receipt is
+# simply one of several instalments against it.  The remaining balance stays
+# open and no residual cap applies, because the balance is expected to be
+# cleared by later receipts.
+UNRESTRICTED_PARTIAL_SCENARIOS = {
+    "Partial Payment",
+    "Installment",
+}
+
 REVIEW_ONLY_SCENARIOS = {
     "Duplicate Review",
     "Currency Mismatch",
@@ -113,6 +141,16 @@ REVIEW_ONLY_SCENARIOS = {
     "On-account / Unapplied",
     "Missing ERP Customer ID",
     "Ambiguous Invoice Reference",
+}
+
+# Scenarios that may be applied only after a controlled fallback match:
+#   - "Missing ERP Customer ID"  -> fall back to customer/remitter name.
+#   - "Parent Child Payment"     -> fall back to the child customer AR.
+# These are handled separately from REVIEW_ONLY_SCENARIOS because a safe
+# match is still possible when the memo names a specific open invoice.
+NAME_FALLBACK_SCENARIOS = {
+    "Missing ERP Customer ID",
+    "Parent Child Payment",
 }
 
 
@@ -181,7 +219,7 @@ def classify_memo(value: object) -> str:
         return "No Memo"
     if "could match" in text or "ambiguous" in text:
         return "Ambiguous Invoice Reference"
-    if "bank fee" in text or "fee deducted" in text:
+    if re.search(r"\bbank fee\b", text) or "fee deducted" in text:
         return "Bank Fee"
     if "penny rounding" in text or "rounding variance" in text:
         return "Rounding Variance"
@@ -213,6 +251,8 @@ def classify_memo(value: object) -> str:
         return "Wrong Customer or Legal Entity"
     if "tax withheld" in text:
         return "Tax Withholding"
+    if "sales tax" in text or "tax adjustment" in text:
+        return "Sales Tax Adjustment"
     if "fx" in text or "international wire" in text:
         return "FX Exception"
     if "future-dated" in text:
@@ -327,23 +367,90 @@ def is_open_ar_row(ar_row: pd.Series) -> bool:
     return True
 
 
-def build_candidate_mask(ar_df: pd.DataFrame, customer_key: str, currency_key: str) -> pd.Series:
+def build_candidate_mask(
+    ar_df: pd.DataFrame,
+    customer_key: str,
+    currency_key: str,
+    alt_customer_keys: tuple[str, ...] = (),
+) -> pd.Series:
     """
-    FIX: Uses OUT_MATCHED_BANK_TXN_COL (a new output column) to detect rows
-    already matched in this run, instead of reading the original status columns
-    which we no longer mutate.
+    Build the pool of open AR rows that may be used for amount-combination
+    matching.
+
+    An invoice that was already partially applied in this run stays in the
+    pool so that later instalments can be matched against its remaining
+    balance.  A fully cleared invoice is excluded.
     """
+    allowed_keys = {customer_key, *[k for k in alt_customer_keys if k]}
     already_matched = ar_df[OUT_MATCHED_BANK_TXN_COL].fillna("").astype(str).str.strip() != ""
+    fully_cleared = already_matched & (ar_df["__ar_open_amount_cents"] <= 0)
 
     return (
-        (ar_df["__customer_key"] == customer_key)
+        (ar_df["__customer_key"].isin(allowed_keys))
         & (ar_df["__currency_key"] == currency_key)
         & (ar_df["__ar_open_amount_cents"] > 0)
-        & (~already_matched)
+        & (~fully_cleared)
         & (~ar_df[AR_RECON_STATUS_COL].fillna("").str.strip().str.lower().isin({"reconciled", "matched", "closed"}))
         & (~ar_df[AR_STATUS_COL].fillna("").str.strip().str.lower().isin({"closed", "paid", "cancelled", "void", "written off", "disputed"}))
         & (~ar_df[AR_RECON_STATUS_COL].fillna("").str.strip().str.lower().isin({"on hold"}))
     )
+
+
+def build_name_fallback_keys(
+    ar_df: pd.DataFrame,
+    bank_row: pd.Series,
+) -> tuple[str, ...]:
+    """
+    Build controlled fallback customer keys for receipts that cannot be matched
+    on ERP Customer ID alone.
+
+    Two cases are supported:
+
+    1. Missing ERP Customer ID (S15)
+       The bank feed has no ERP Customer ID.  The receipt may still be matched
+       when the customer name resolves to exactly one ERP customer that has
+       open AR in the same currency.  Ambiguous names return no key so the
+       receipt is routed to review rather than guessed.
+
+    2. Parent pays child (S22)
+       The receipt carries the parent ERP Customer ID but the memo names a
+       child invoice.  The child customer key is returned as an alternative so
+       the memo invoice can be resolved, but the invoice reference must still
+       match exactly.
+    """
+    keys: list[str] = []
+
+    bank_customer_id = normalize_text(bank_row.get(BANK_CUSTOMER_ID_COL, ""))
+
+    # Case 1: resolve customer name -> ERP customer id.
+    # Only applied when the bank feed has no ERP Customer ID at all.
+    if not bank_customer_id:
+        names = [
+            normalize_key(bank_row.get(BANK_CUSTOMER_NAME_COL, "")),
+            normalize_key(bank_row.get(BANK_REMITTER_NAME_COL, "")),
+        ]
+        names = [n for n in names if n]
+
+        ar_names = ar_df[AR_CUSTOMER_NAME_COL].apply(normalize_key)
+        for name in names:
+            matched_names = ar_df.loc[ar_names == name, AR_CUSTOMER_ID_COL]
+            unique_ids = sorted({normalize_key(v) for v in matched_names if normalize_key(v)})
+            if len(unique_ids) == 1:
+                keys.append(unique_ids[0])
+                break
+
+    # Case 2: parent paying a child invoice.  The receipt carries the parent
+    # ERP Customer ID, but the memo names a child invoice.  The child customer
+    # key is added as an alternative so the memo invoice can be resolved.
+    parent_key = normalize_key(bank_customer_id)
+    if parent_key:
+        child_mask = ar_df[AR_PARENT_CUSTOMER_ID_COL].apply(normalize_key) == parent_key
+        for child_id in ar_df.loc[child_mask, AR_CUSTOMER_ID_COL]:
+            child_key = normalize_key(child_id)
+            if child_key and child_key != parent_key and child_key not in keys:
+                keys.append(child_key)
+
+    return tuple(keys)
 
 
 # ---------------------------------------------------------------------------
@@ -359,10 +466,11 @@ def find_invoice_reference_match(
     bank_fee_cents: int,
     customer_key: str,
     currency_key: str,
+    alt_customer_keys: tuple[str, ...] = (),
 ) -> MatchResult | None:
     if not invoice_numbers:
         return None
-    if scenario in REVIEW_ONLY_SCENARIOS:
+    if scenario in REVIEW_ONLY_SCENARIOS and scenario not in NAME_FALLBACK_SCENARIOS:
         return None
 
     order_map = {inv: i for i, inv in enumerate(invoice_numbers)}
@@ -371,17 +479,27 @@ def find_invoice_reference_match(
     # Restrict memo-based matching to the same customer and currency so that
     # a receipt cannot be posted to another customer's AR merely because the
     # memo contains a duplicated, mistyped, or cross-customer invoice number.
+    #
+    # alt_customer_keys allows a controlled fallback (missing ERP Customer ID
+    # resolved by customer name, or a parent paying a child invoice).  The
+    # memo must still name a specific open invoice in the same currency.
+    allowed_keys = {customer_key, *[k for k in alt_customer_keys if k]}
     inv_df = ar_df.loc[
         ar_df["__invoice_key"].isin(set(invoice_numbers))
-        & (ar_df["__customer_key"] == customer_key)
+        & (ar_df["__customer_key"].isin(allowed_keys))
         & (ar_df["__currency_key"] == currency_key)
     ].copy()
     if inv_df.empty:
         return None
 
-    # Exclude rows already matched in this run (same fix as build_candidate_mask)
-    already_matched = inv_df[OUT_MATCHED_BANK_TXN_COL].fillna("").astype(str).str.strip() != ""
-    inv_df = inv_df[~already_matched]
+    # An invoice that was already partially applied in this run stays
+    # matchable, so that later instalments against the same invoice can be
+    # applied to its remaining balance.  A fully cleared invoice is excluded.
+    working_balance = inv_df["__ar_open_amount_cents"]
+    fully_cleared = (
+        inv_df[OUT_MATCHED_BANK_TXN_COL].fillna("").astype(str).str.strip() != ""
+    ) & (working_balance <= 0)
+    inv_df = inv_df[~fully_cleared]
     if inv_df.empty:
         return None
 
@@ -394,6 +512,26 @@ def find_invoice_reference_match(
         ["__memo_order", AR_DUE_DATE_COL, AR_INVOICE_DATE_COL], kind="stable"
     )
     referenced_total_cents = int(inv_df["__ar_open_amount_cents"].sum())
+
+    # --- Bank Fee (S05) ---------------------------------------------------
+    # The bank deducts a fee, so the customer remitted gross but the bank
+    # received net.  AR must be cleared at GROSS while bank cash reconciles
+    # at NET.  The referenced invoice therefore normally equals the NET
+    # amount, not the gross amount.
+    if scenario == "Bank Fee" or bank_fee_cents > 0:
+        if referenced_total_cents == target_net_cents:
+            return MatchResult(
+                ar_indexes=[int(i) for i in inv_df.index],
+                applied_cents=referenced_total_cents,
+                residual_cents=0,
+                method="Memo Invoice Match - Bank Fee",
+                note=(
+                    f"Memo invoice total equals net cash {cents_to_money(target_net_cents):,.2f}. "
+                    f"Clear AR at net {cents_to_money(target_net_cents):,.2f}; "
+                    f"gross received {cents_to_money(target_gross_cents):,.2f} includes a bank fee of "
+                    f"{cents_to_money(bank_fee_cents):,.2f} to be booked separately."
+                ),
+            )
 
     if referenced_total_cents == target_gross_cents:
         if bank_fee_cents > 0 or scenario == "Bank Fee":
@@ -428,38 +566,61 @@ def find_invoice_reference_match(
             note=f"Small penny rounding variance {cents_to_money(diff_to_gross):,.2f}.",
         )
 
-    if scenario in {"Partial Payment", "Installment"} and 0 < target_gross_cents < referenced_total_cents:
-        return MatchResult(
-            ar_indexes=[int(i) for i in inv_df.index],
-            applied_cents=target_gross_cents,
-            residual_cents=referenced_total_cents - target_gross_cents,
-            method=f"Memo Invoice Match - {scenario}",
-            note=(
-                f"Partial/installment payment. Apply {cents_to_money(target_gross_cents):,.2f}; "
-                f"remaining AR balance is {cents_to_money(referenced_total_cents - target_gross_cents):,.2f}."
-            ),
+    # --- Scenarios that legitimately leave a residual ---------------------
+    # The memo names the invoice, so a residual is expected.  The residual is
+    # still bounded: a gap larger than MAX_PARTIAL_RESIDUAL_CENTS means the
+    # memo probably points at the wrong invoice and must not be applied.
+    if scenario in PARTIAL_ALLOWANCE_SCENARIOS:
+        residual_cents = referenced_total_cents - target_gross_cents
+
+        # An instalment may legitimately be much smaller than the invoice it
+        # is paying, so no residual cap is applied for those scenarios.
+        residual_allowed = (
+            scenario in UNRESTRICTED_PARTIAL_SCENARIOS
+            or abs(residual_cents) <= max(
+                MIN_PARTIAL_RESIDUAL_CENTS,
+                int(referenced_total_cents * MAX_PARTIAL_RESIDUAL_RATIO),
+            )
         )
 
-    if scenario == "Overpayment" and target_gross_cents > referenced_total_cents:
-        return MatchResult(
-            ar_indexes=[int(i) for i in inv_df.index],
-            applied_cents=referenced_total_cents,
-            residual_cents=target_gross_cents - referenced_total_cents,
-            method="Memo Invoice Match - Overpayment",
-            note=f"Payment exceeds referenced open AR by {cents_to_money(target_gross_cents - referenced_total_cents):,.2f}.",
-        )
+        if 0 < target_gross_cents < referenced_total_cents and residual_allowed:
+            method = f"Memo Invoice Match - {scenario}"
+            if scenario == "Short Payment":
+                note = (
+                    f"Customer short-paid by {cents_to_money(residual_cents):,.2f}; "
+                    f"do not fully close until discount/write-off is approved."
+                )
+            elif scenario in {"Partial Payment", "Installment"}:
+                note = (
+                    f"Partial/installment payment. Apply {cents_to_money(target_gross_cents):,.2f}; "
+                    f"remaining AR balance is {cents_to_money(residual_cents):,.2f}."
+                )
+            else:
+                note = (
+                    f"Applied {cents_to_money(target_gross_cents):,.2f} against referenced AR of "
+                    f"{cents_to_money(referenced_total_cents):,.2f}; "
+                    f"residual {cents_to_money(residual_cents):,.2f} requires review."
+                )
+            return MatchResult(
+                ar_indexes=[int(i) for i in inv_df.index],
+                applied_cents=target_gross_cents,
+                residual_cents=residual_cents,
+                method=method,
+                note=note,
+            )
 
-    if scenario == "Short Payment" and 0 < target_gross_cents < referenced_total_cents:
-        return MatchResult(
-            ar_indexes=[int(i) for i in inv_df.index],
-            applied_cents=target_gross_cents,
-            residual_cents=referenced_total_cents - target_gross_cents,
-            method="Memo Invoice Match - Short Payment",
-            note=(
-                f"Customer short-paid by {cents_to_money(referenced_total_cents - target_gross_cents):,.2f}; "
-                f"do not fully close until discount/write-off is approved."
-            ),
-        )
+        if target_gross_cents > referenced_total_cents and residual_allowed:
+            return MatchResult(
+                ar_indexes=[int(i) for i in inv_df.index],
+                applied_cents=referenced_total_cents,
+                residual_cents=diff_to_gross,
+                method=f"Memo Invoice Match - {scenario}",
+                note=(
+                    f"Payment exceeds referenced open AR by "
+                    f"{cents_to_money(diff_to_gross):,.2f}; "
+                    f"apply the AR balance and route the excess to unapplied cash review."
+                ),
+            )
 
     if scenario == "Small Residual Write-Off" and abs(diff_to_gross) <= SMALL_RESIDUAL_WRITE_OFF_CENTS:
         return MatchResult(
@@ -507,6 +668,68 @@ def find_amount_combination_match(
         residual_cents=0,
         method="Customer Currency Amount Combination",
         note="No usable memo invoice reference; matched by customer, currency, and exact gross amount combination.",
+    )
+
+
+def find_partial_combination_match(
+    candidates_df: pd.DataFrame,
+    target_gross_cents: int,
+    scenario: str,
+) -> MatchResult | None:
+    """
+    Fallback used when no invoice combination matches the receipt exactly but
+    the scenario legitimately leaves a residual (short pay, overpayment,
+    partial payment, instalment, small residual write-off, sales tax).
+
+    SAFETY RULE: the fallback only fires when exactly ONE candidate invoice is
+    a plausible match, i.e. it is the only invoice whose residual is within
+    the allowed proportion of its open amount.  When several invoices look
+    equally plausible the receipt is left for manual review rather than
+    consuming an invoice that may belong to another receipt.
+    """
+    if candidates_df.empty:
+        return None
+    if scenario not in PARTIAL_ALLOWANCE_SCENARIOS:
+        return None
+
+    plausible: list[tuple[int, int]] = []  # (index, residual_cents)
+    for idx, row in candidates_df.iterrows():
+        invoice_cents = int(row["__ar_open_amount_cents"])
+        if invoice_cents <= 0:
+            continue
+        residual_cents = abs(invoice_cents - target_gross_cents)
+        # The residual cap always applies here.  An unrestricted residual is
+        # only acceptable when the memo names the invoice explicitly, because
+        # without a memo reference an invoice must not be consumed on a guess.
+        if residual_cents <= max(
+            MIN_PARTIAL_RESIDUAL_CENTS,
+            int(invoice_cents * MAX_PARTIAL_RESIDUAL_RATIO),
+        ):
+            plausible.append((int(idx), residual_cents))
+
+    if len(plausible) != 1:
+        return None
+
+    idx, residual_cents = plausible[0]
+    invoice_cents = int(candidates_df.at[idx, "__ar_open_amount_cents"])
+
+    if target_gross_cents < invoice_cents:
+        applied_cents = target_gross_cents
+        residual_cents = invoice_cents - target_gross_cents
+    else:
+        applied_cents = invoice_cents
+        residual_cents = target_gross_cents - invoice_cents
+
+    return MatchResult(
+        ar_indexes=[idx],
+        applied_cents=applied_cents,
+        residual_cents=residual_cents,
+        method=f"Amount Combination - {scenario}",
+        note=(
+            f"No exact amount combination for this receipt; applied "
+            f"{cents_to_money(applied_cents):,.2f} to the only plausible open invoice "
+            f"with a residual of {cents_to_money(residual_cents):,.2f} requiring review."
+        ),
     )
 
 
@@ -628,17 +851,44 @@ def apply_match(
         applied_cents  = per_invoice_applied[i]
         residual_cents = per_invoice_residual[i]
 
-        ar_df.at[idx, OUT_MATCHED_BANK_TXN_COL]      = bank_row[BANK_TRANSACTION_ID_COL]
-        ar_df.at[idx, OUT_MATCHED_PAYMENT_DATE_COL]   = bank_row[BANK_VALUE_DATE_COL]
-        ar_df.at[idx, OUT_MATCHED_AMOUNT_COL]         = cents_to_money(applied_cents)
-        ar_df.at[idx, OUT_APPLIED_AMOUNT_COL]         = cents_to_money(applied_cents)
+        # An invoice may be paid by several receipts (instalments).  The
+        # applied amount, the transaction list and the residual are therefore
+        # accumulated rather than overwritten, so the AR row shows the full
+        # settlement history and the remaining balance.
+        previous_applied = money_to_cents(ar_df.at[idx, OUT_APPLIED_AMOUNT_COL])
+        cumulative_applied = previous_applied + applied_cents
+
+        original_open_cents = int(ar_df.at[idx, "__ar_original_open_cents"])
+        remaining_balance = max(original_open_cents - cumulative_applied, 0)
+        excess = max(cumulative_applied - original_open_cents, 0)
+        if close_invoice:
+            residual_cents = excess
+        else:
+            residual_cents = remaining_balance + excess
+
+        previous_txns = normalize_text(ar_df.at[idx, OUT_MATCHED_BANK_TXN_COL])
+        matched_txn_id = bank_row[BANK_TRANSACTION_ID_COL]
+        if previous_txns and matched_txn_id not in previous_txns.split(", "):
+            matched_txn_id = f"{previous_txns}, {matched_txn_id}"
+
+        previous_dates = normalize_text(ar_df.at[idx, OUT_MATCHED_PAYMENT_DATE_COL])
+        payment_date = bank_row[BANK_VALUE_DATE_COL]
+        if previous_dates:
+            payment_date = f"{previous_dates}, {payment_date}"
+
+        ar_df.at[idx, OUT_MATCHED_BANK_TXN_COL]      = matched_txn_id
+        ar_df.at[idx, OUT_MATCHED_PAYMENT_DATE_COL]   = payment_date
+        ar_df.at[idx, OUT_MATCHED_AMOUNT_COL]         = cents_to_money(cumulative_applied)
+        ar_df.at[idx, OUT_APPLIED_AMOUNT_COL]         = cents_to_money(cumulative_applied)
         ar_df.at[idx, OUT_RESIDUAL_AMOUNT_COL]        = cents_to_money(residual_cents)
         ar_df.at[idx, OUT_MATCH_METHOD_COL]           = result.method
         ar_df.at[idx, OUT_SUGGESTED_RECON_STATUS_COL] = suggested_ar_status
         ar_df.at[idx, OUT_RECON_NOTES_COL]            = (
             f"{result.method}: bank receipt {bank_row[BANK_TRANSACTION_ID_COL]} "
             f"matched invoice(s) {', '.join(invoice_numbers)}; "
-            f"applied {cents_to_money(applied_cents):,.2f} {currency_key}. "
+            f"applied {cents_to_money(applied_cents):,.2f} {currency_key} "
+            f"(cumulative {cents_to_money(cumulative_applied):,.2f}; "
+            f"remaining {cents_to_money(remaining_balance):,.2f}). "
             f"{result.note}"
         )
         # ✅ AR_OPEN_AMOUNT_COL  — NOT touched (original source data preserved)
@@ -646,10 +896,11 @@ def apply_match(
         # ✅ AR_RECON_STATUS_COL — NOT touched
 
         # Update the internal working column so subsequent installment payments
-        # see the reduced balance, without touching the original Open Amount column.
-        if not close_invoice:
-            new_working_balance = max(int(ar_df.at[idx, "__ar_open_amount_cents"]) - applied_cents, 0)
-            ar_df.at[idx, "__ar_open_amount_cents"] = new_working_balance
+        # see the reduced balance, without touching the original Open Amount
+        # column.  The balance is reduced for every applied invoice, including
+        # partial ones, so later instalments can be matched to the remainder.
+        new_working_balance = max(int(ar_df.at[idx, "__ar_open_amount_cents"]) - applied_cents, 0)
+        ar_df.at[idx, "__ar_open_amount_cents"] = new_working_balance
 
     # --- Write bank receipt output columns ---
     suggested_bank_status = "Reconciled" if is_fully_reconciled else "Pending Review"
@@ -818,6 +1069,9 @@ def main() -> None:
     bank_df["__bank_fee_cents"]     = bank_df[BANK_FEES_COL].apply(money_to_cents)
     bank_df["__net_amount_cents"]   = bank_df[BANK_NET_AMOUNT_COL].apply(money_to_cents)
     ar_df["__ar_open_amount_cents"] = ar_df[AR_OPEN_AMOUNT_COL].apply(money_to_cents)
+    # Original open amount, kept so that cumulative applied amounts and the
+    # remaining balance can be recalculated across multiple instalments.
+    ar_df["__ar_original_open_cents"] = ar_df["__ar_open_amount_cents"]
 
     bank_df["__customer_key"] = bank_df[BANK_CUSTOMER_ID_COL].apply(normalize_key)
     bank_df.loc[bank_df["__customer_key"] == "", "__customer_key"] = (
@@ -870,6 +1124,22 @@ def main() -> None:
 
     bank_df = bank_df.sort_values(
         [BANK_VALUE_DATE_COL, BANK_POSTING_DATE_COL, BANK_TRANSACTION_ID_COL], kind="stable"
+    )
+
+    # Two-pass ordering.
+    #
+    # Pass 1 processes receipts whose memo names an invoice explicitly.  These
+    # carry the strongest evidence of intent, so they claim their invoices
+    # first.  Pass 2 handles the remaining receipts (no usable memo), which
+    # have to guess from customer/currency/amount and must not steal an
+    # invoice that a memo-referenced receipt already named.
+    has_memo_invoice = bank_df[BANK_MEMO_COL].apply(
+        lambda v: bool(extract_invoice_numbers(v))
+    )
+    bank_df["__has_memo_invoice"] = has_memo_invoice
+    bank_df = pd.concat(
+        [bank_df.loc[has_memo_invoice], bank_df.loc[~has_memo_invoice]],
+        axis=0,
     )
 
     # Signature -> first successfully applied bank transaction ID.
@@ -929,13 +1199,17 @@ def main() -> None:
             pending_review_count += 1
             continue
 
-        if scenario in REVIEW_ONLY_SCENARIOS:
+        if scenario in REVIEW_ONLY_SCENARIOS and scenario not in NAME_FALLBACK_SCENARIOS:
             reason = f"{scenario}: not eligible for full auto-reconciliation."
             append_unmatched(unmatched_bank_rows, bank_row, reason, scenario, extracted_invoices)
             bank_df.at[bank_index, BANK_PROCESSING_NOTES_COL]     = reason
             bank_df.at[bank_index, OUT_SUGGESTED_BANK_STATUS_COL] = "Pending Review"
             pending_review_count += 1
             continue
+
+        # Controlled fallback keys for receipts that cannot be matched on ERP
+        # Customer ID alone (missing customer ID, or parent paying a child).
+        alt_customer_keys = build_name_fallback_keys(ar_df, bank_row)
 
         match_result = find_invoice_reference_match(
             ar_df=ar_df,
@@ -946,12 +1220,15 @@ def main() -> None:
             bank_fee_cents=bank_fee_cents,
             customer_key=bank_row["__customer_key"],
             currency_key=bank_row["__currency_key"],
+            alt_customer_keys=alt_customer_keys,
         )
 
         if match_result is None:
             customer_key = bank_row["__customer_key"]
             currency_key = bank_row["__currency_key"]
-            ar_mask      = build_candidate_mask(ar_df, customer_key, currency_key)
+            ar_mask      = build_candidate_mask(
+                ar_df, customer_key, currency_key, alt_customer_keys
+            )
             candidates_df = ar_df.loc[ar_mask].copy()
 
             if candidates_df.empty:
@@ -962,6 +1239,11 @@ def main() -> None:
                 continue
 
             match_result = find_amount_combination_match(candidates_df, target_gross_cents)
+            if match_result is None:
+                # Second chance: the scenario may legitimately leave a residual.
+                match_result = find_partial_combination_match(
+                    candidates_df, target_gross_cents, scenario
+                )
             if match_result is None:
                 reason = "No exact invoice reference or customer/currency amount combination equals the gross receipt amount."
                 append_unmatched(
@@ -1006,17 +1288,18 @@ def main() -> None:
     # Compare only the amounts generated by this program and use the same
     # Suggested status definition on both sides.  Open Amount is source data
     # and must not be used as the primary applied-cash control total.
+    #
+    # NOTE: an invoice may be settled by several receipts (instalments), so the
+    # AR side holds the cumulative applied amount for that invoice while the
+    # bank side holds one amount per receipt.  Both sides are compared over
+    # ALL applied rows (not only "Reconciled" ones) so that a multi-instalment
+    # invoice is counted once on the AR side and once per receipt on the bank
+    # side.
     reconciled_ar_total_cents = int(
-        ar_df.loc[
-            ar_df[OUT_SUGGESTED_RECON_STATUS_COL].fillna("").astype(str).str.strip().eq("Reconciled"),
-            OUT_APPLIED_AMOUNT_COL,
-        ].apply(money_to_cents).sum()
+        ar_df[OUT_APPLIED_AMOUNT_COL].apply(money_to_cents).sum()
     )
     reconciled_bank_total_cents = int(
-        bank_df.loc[
-            bank_df[OUT_SUGGESTED_BANK_STATUS_COL].fillna("").astype(str).str.strip().eq("Reconciled"),
-            "AR Applied Amount Total",
-        ].apply(money_to_cents).sum()
+        bank_df["AR Applied Amount Total"].apply(money_to_cents).sum()
     )
     reconciliation_difference_cents = (
         reconciled_bank_total_cents - reconciled_ar_total_cents
@@ -1050,10 +1333,12 @@ def main() -> None:
         "__bank_fee_cents",
         "__net_amount_cents",
         "__ar_open_amount_cents",
+        "__ar_original_open_cents",
         "__customer_key",
         "__currency_key",
         "__invoice_key",
         "__memo_order",
+        "__has_memo_invoice",
     ]
     ar_output   = ar_df.drop(columns=[c for c in helper_cols if c in ar_df.columns],   errors="ignore")
     bank_output = bank_df.drop(columns=[c for c in helper_cols if c in bank_df.columns], errors="ignore")

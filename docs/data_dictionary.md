@@ -50,7 +50,8 @@ The script may add or update the following columns in the processed bank receipt
 | Extracted Invoice Numbers | Invoice numbers parsed from `Memo / Remittance Detail`. |
 | Memo Scenario | Classified scenario based on remittance text, such as Bank Fee, Short Payment, Refund, or FX Exception. |
 | Match Method | Matching method used for the receipt. |
-| Match Confidence | Confidence level assigned by the automation, such as High or Medium. |
+| Suggested Bank Status | Suggested status for the receipt: `Reconciled`, `Pending Review`, or `Exception`. The source `Status` column is never modified. |
+| AR Applied Amount Total | Total cash applied to AR by this receipt. Used for the AR/bank control total. |
 
 ## 2. Open_AR_Detail.xlsx
 
@@ -89,11 +90,10 @@ The script may add or update the following columns in the reconciled AR output:
 
 | Column Name | Description |
 |---|---|
-| Applied Amount | Amount applied from the bank receipt to the AR item. |
-| Residual Amount | Remaining open balance or residual difference after applying cash. |
+| Applied Amount | Cumulative amount applied from bank receipts to the AR item. Accumulates when an invoice is paid by several instalments. |
+| Residual Amount | Remaining open balance after applying cash, or the excess amount on an overpayment. |
 | Match Method | Method used to match the invoice, such as Memo Invoice Match or Customer Currency Amount Combination. |
-| Match Confidence | Confidence level assigned by the automation. |
-| Review Flag | Manual review flag, such as Short Pay Review, Partial Apply - Keep AR Open, or Review Bank Fee GL. |
+| Suggested Recon Status | Suggested status for the AR item: `Reconciled`, `Pending Review`, or `Unmatched`. The source `Reconciliation Status` column is never modified. |
 | Reconciliation Notes | Detailed explanation of the matching result. |
 
 ## 3. Output Workbook

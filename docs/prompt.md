@@ -85,7 +85,11 @@ Auto-reconciliation policy:
 3. Keep partial payments open after applying cash.
 4. Do not auto-close risky scenarios.
 5. Route risky scenarios to Pending Review or Exception.
-6. Add a clear Review Flag explaining why manual review is required.
+6. Add clear Processing Notes and Reconciliation Notes explaining the outcome.
+
+The source `Reconciliation Status`, `AR Status`, and bank `Status` columns are
+never modified. Results are written to new output columns so the original
+data stays auditable.
 
 Output requirements:
 
@@ -103,27 +107,24 @@ The output workbook must include these sheets:
 
 For Open AR output, write or update these columns:
 
-1. Reconciliation Status
-2. AR Status
-3. Matched Bank Transaction ID
-4. Matched Payment Date
-5. Matched Amount
-6. Applied Amount
-7. Residual Amount
-8. Match Method
-9. Match Confidence
-10. Review Flag
-11. Reconciliation Notes
+1. Suggested Recon Status
+2. Matched Bank Transaction ID
+3. Matched Payment Date
+4. Matched Amount
+5. Applied Amount
+6. Residual Amount
+7. Match Method
+8. Reconciliation Notes
 
 For Bank Receipts output, write or update these columns:
 
-1. Status
-2. Reconciliation Batch ID
-3. Processing Notes
-4. Extracted Invoice Numbers
-5. Memo Scenario
-6. Match Method
-7. Match Confidence
+1. Reconciliation Batch ID
+2. Processing Notes
+3. Extracted Invoice Numbers
+4. Memo Scenario
+5. Match Method
+6. Suggested Bank Status
+7. AR Applied Amount Total
 
 Data quality checks:
 

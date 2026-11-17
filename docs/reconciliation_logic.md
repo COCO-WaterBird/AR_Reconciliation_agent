@@ -105,13 +105,22 @@ INV-900001
 INV-900002
 ```
 
-If the referenced invoices are open and their total open amount equals the bank `Gross Receipt Amount`, the receipt is matched with high confidence.
+If the referenced invoices are open and their total open amount equals the bank `Gross Receipt Amount`, the receipt is matched.
 
 Expected outcome:
 
 ```text
 Match Method = Memo Invoice Match
-Match Confidence = High
+Suggested Recon Status = Reconciled
+```
+
+When the bank deducted a fee, the referenced invoice normally equals the
+`Net Amount` rather than the gross amount, because the customer remitted gross
+but the bank received net:
+
+```text
+Match Method = Memo Invoice Match - Bank Fee
+Suggested Bank Status = Pending Review
 ```
 
 ### Priority 2: Memo Invoice Match with Special Scenario Handling
@@ -120,13 +129,20 @@ If the memo includes invoice references but the amount does not match exactly, t
 
 | Scenario | Handling |
 |---|---|
-| Bank Fee | Clear AR at gross amount, reconcile bank at net amount, and flag fee for GL review. |
+| Bank Fee | Clear AR at net cash, reconcile bank at gross received, and flag the fee for GL review. |
 | Rounding Variance | Match if within tolerance and flag rounding write-off. |
 | Partial Payment | Apply available cash and keep the residual invoice balance open. |
 | Installment Payment | Apply cash as an installment and keep remaining AR open. |
 | Short Payment | Apply cash and route residual balance to short-pay review. |
 | Overpayment | Apply to referenced AR and route excess to unapplied cash or credit balance review. |
 | Small Residual Write-Off | Flag for write-off review based on policy threshold. |
+| Sales Tax Adjustment | Apply cash to the referenced invoice and route the tax difference to review. |
+
+Residual control: for scenarios other than Partial Payment and Installment,
+the residual between the receipt and the referenced invoice must be within
+`MAX_PARTIAL_RESIDUAL_RATIO` (10%) of the invoice open amount, with an
+absolute floor of `MIN_PARTIAL_RESIDUAL_CENTS` (1.00). A larger gap usually
+means the memo points at a different invoice and is not applied.
 
 ### Priority 3: Customer + Currency + Amount Combination Match
 
@@ -141,6 +157,10 @@ open AR rows only
 positive Open Amount only
 not already Reconciled, Matched, or Closed
 ```
+
+An invoice that was already partially applied stays in the pool, so that later
+installments can be matched against its remaining balance. A fully cleared
+invoice is excluded.
 
 The script then uses subset-sum logic to determine whether one or more invoices add up to the bank `Gross Receipt Amount`.
 
@@ -162,7 +182,19 @@ Expected outcome:
 
 ```text
 Match Method = Customer Currency Amount Combination
-Match Confidence = Medium
+Suggested Recon Status = Reconciled
+```
+
+### Priority 3a: Partial Amount Combination Match
+
+When no combination matches exactly and the scenario legitimately leaves a
+residual, the closest single invoice may be used, but only when exactly one
+candidate is a plausible match. If several candidates look equally plausible,
+the receipt is routed to review rather than consuming an invoice that may
+belong to another receipt.
+
+```text
+Match Method = Amount Combination - <Scenario>
 ```
 
 ### Priority 4: Exception Review
@@ -180,6 +212,27 @@ Common exception reasons include:
 - Negative or zero receipt amount
 - Gross / fee / net amount validation failure
 
+### 5.1 Processing Order
+
+Receipts are processed in two passes so that explicit remittance advice always
+wins over amount-based guessing:
+
+1. **Pass 1** — receipts whose memo names an invoice number.
+2. **Pass 2** — receipts with no usable memo, which must be matched by
+   customer, currency, and amount.
+
+Within each pass, receipts are processed chronologically by value date.
+
+### 5.2 Customer Fallbacks
+
+Two controlled fallbacks are used when the ERP Customer ID cannot be used
+directly:
+
+| Case | Rule |
+|---|---|
+| Missing ERP Customer ID (S15) | Resolve the customer name to exactly one ERP customer that has open AR. If the name is ambiguous, the receipt goes to review. |
+| Parent pays child (S22) | The parent ERP Customer ID is matched against `Parent Customer ID` in the AR file to find child customers. The memo must still name a specific open child invoice. |
+
 ## 6. Auto-Close Policy
 
 The automation only closes AR invoices when the match is clean.
@@ -190,14 +243,19 @@ An invoice can be automatically closed when:
 2. Residual amount is zero.
 3. The invoice is open.
 4. The receipt is not a risky review-only scenario.
-5. The review flag does not indicate partial payment or short pay review.
+5. The match method does not indicate a partial, short-pay, overpayment, fee, or
+   rounding write-off case.
 
 Expected output:
 
 ```text
-AR Status = Closed
-Reconciliation Status = Reconciled
+Suggested Recon Status = Reconciled
+Suggested Bank Status  = Reconciled
 ```
+
+The source `AR Status`, `Reconciliation Status`, and bank `Status` columns are
+never modified. All results are written to new output columns so that the
+original data remains auditable.
 
 ## 7. Partial and Residual Balance Policy
 
@@ -208,11 +266,9 @@ The automation should not automatically close invoices with unresolved residual 
 Expected output:
 
 ```text
-AR Status = Open
-Reconciliation Status = Open
-Applied Amount = amount paid
+Suggested Recon Status = Pending Review
+Applied Amount = cumulative amount paid
 Residual Amount = remaining unpaid amount
-Review Flag = Partial Apply - Keep AR Open
 ```
 
 ### Short Payment
@@ -220,11 +276,9 @@ Review Flag = Partial Apply - Keep AR Open
 Expected output:
 
 ```text
-AR Status = Open
-Reconciliation Status = Open
+Suggested Recon Status = Pending Review
 Applied Amount = amount paid
 Residual Amount = short-paid amount
-Review Flag = Short Pay Review
 ```
 
 ### Overpayment
@@ -234,7 +288,17 @@ Expected output:
 ```text
 Applied Amount = open AR amount
 Residual Amount = excess amount
-Review Flag = Create Unapplied Cash / Credit Balance
+Suggested Bank Status = Pending Review
+```
+
+### Multiple Installments Against One Invoice
+
+When an invoice is paid by several receipts, the AR row accumulates:
+
+```text
+Matched Bank Transaction ID = BTRX-000102, BTRX-000101
+Applied Amount             = 4,200.00   (cumulative across receipts)
+Residual Amount            = 0.00       (once fully settled)
 ```
 
 ## 8. Review-Only Scenarios
@@ -256,7 +320,7 @@ The following scenarios should generally be routed to review instead of being fu
 | Credit Memo | Requires credit memo application logic. |
 | Tax Withholding | Requires tax deduction or withholding treatment. |
 | On-account / Unapplied | No invoice reference is available. |
-| Missing ERP Customer ID | Customer identity is not reliable enough for auto-close. |
+| Missing ERP Customer ID | Customer identity is not reliable enough for auto-close. A controlled name fallback may still match it. |
 | Ambiguous Invoice Reference | Memo reference does not identify one clear match. |
 
 ## 9. Data Quality Checks
@@ -273,41 +337,38 @@ These records are written to the `Data Quality Checks` sheet with a recommendati
 
 ## 10. Output Status Values
 
-### Bank Receipt Status
+### Suggested Bank Status (`Suggested Bank Status`)
 
 | Status | Meaning |
 |---|---|
-| Reconciled | Receipt was matched and no review flag prevents final reconciliation. |
-| Pending Review | Receipt was partially matched or has a review flag. |
+| Reconciled | Receipt was matched and no review condition prevents final reconciliation. |
+| Pending Review | Receipt was partially matched, or has a fee, rounding, or write-off condition that needs review. |
 | Exception | Receipt could not be safely matched. |
 
-### AR Status
+### Suggested Recon Status (`Suggested Recon Status`)
 
 | Status | Meaning |
 |---|---|
-| Open | Invoice remains open after processing. |
-| Closed | Invoice was fully cleared and closed. |
-
-### Reconciliation Status
-
-| Status | Meaning |
-|---|---|
-| Open | Invoice remains open or partially applied. |
 | Reconciled | Invoice was fully matched and cleared. |
+| Pending Review | Invoice was partially applied and still has an open residual. |
+| Unmatched | Invoice received no match in this run. |
 
 ## 11. Match Method Values
 
 | Match Method | Meaning |
 |---|---|
 | Memo Invoice Match | Invoice numbers were found in bank memo and matched to open AR. |
-| Memo Invoice Match - Bank Fee | Memo invoice match where gross clears AR and net reconciles to bank cash after fees. |
+| Memo Invoice Match - Bank Fee | Memo invoice match where net cash clears AR and the fee is booked separately. |
 | Memo Invoice Match - Rounding | Memo invoice match with small penny variance. |
 | Memo Invoice Match - Partial Payment | Memo invoice match with partial payment. |
 | Memo Invoice Match - Installment | Memo invoice match with installment payment. |
 | Memo Invoice Match - Short Payment | Memo invoice match where the customer short-paid. |
 | Memo Invoice Match - Overpayment | Memo invoice match where the customer overpaid. |
+| Memo Invoice Match - Sales Tax Adjustment | Memo invoice match where a sales tax difference is routed to review. |
 | Memo Invoice Match - Small Residual | Memo invoice match with small residual needing write-off review. |
 | Customer Currency Amount Combination | No usable memo invoice reference; matched by customer, currency, and amount combination. |
+| Amount Combination - &lt;Scenario&gt; | No exact combination; the only plausible invoice was applied with a residual requiring review. |
+| Duplicate Payment Check | Receipt identified as a duplicate of an earlier applied receipt. |
 
 ## 12. Summary Metrics
 
@@ -320,6 +381,9 @@ The `Summary` sheet should include the following run metrics:
 | Pending review receipts | Number of receipts requiring manual review. |
 | Unmatched / exception bank receipts | Number of receipts written to exception or unmatched review. |
 | Data quality issues | Number of AR data quality issues found. |
+| Reconciled AR applied amount | Total cash applied on the AR side. |
+| Reconciled bank applied amount | Total cash applied on the bank side. |
+| Reconciled control difference | Difference between the two control totals. Must be zero. |
 | Output file | Name of the generated output workbook. |
 
 ## 13. Limitations and Future Enhancements

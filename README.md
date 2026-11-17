@@ -25,7 +25,7 @@ It matches bank cash receipts against open AR invoices using invoice references,
 
 ## Sample Data
 
-The sample data includes 200 bank receipt rows and 200 open AR rows.
+The sample data includes 200 bank receipt rows and 191 open AR rows.
 
 Scenario coverage is documented here:
 
@@ -35,8 +35,33 @@ Scenario coverage is documented here:
 
 ```bash
 
-python auto_reconcile_na.py -->
+python -m pip install pandas openpyxl
+python auto_reconcile_na.py
+```
 
+The script reads the two source workbooks and writes a new result workbook. The
+source files are never modified.
+
+## Output
+
+```text
+Open_AR_Detail_Reconciled_Result.xlsx
+```
+
+| Sheet | Purpose |
+|---|---|
+| Reconciled Open AR | Open AR detail with match results, applied/residual amounts and notes. |
+| Processed Bank Receipts | Bank receipts with match method, extracted invoices and suggested status. |
+| Unmatched Bank Receipts | Receipts routed to review or exception, with the reason. |
+| Data Quality Checks | AR data quality issues found during processing. |
+| Summary | Run metrics and the AR/bank control total check. |
+
+## Documentation
+
+- [Reconciliation Logic](docs/reconciliation_logic.md) — matching rules, output statuses, match methods
+- [Data Dictionary](docs/data_dictionary.md) — every input and output column
+- [Scenario Coverage](docs/scenario_coverage.md) — S01–S40 scenario reference
+- [Prompt](docs/prompt.md) — the original automation specification
 
 
 # 🤖 AI-Powered AR Cash Application & Reconciliation Agent
@@ -169,13 +194,18 @@ When deterministic matching cannot confidently reconcile a payment, an AI Agent 
 ├── auto_reconcile_na.py
 ├── Bank_Cash_Receipts.xlsx
 ├── Open_AR_Detail.xlsx
-├── output/
-│   ├── Reconciled Open AR.xlsx
-│   ├── Processed Bank Receipts.xlsx
-│   ├── Exception Report.xlsx
-│   └── Summary.xlsx
+├── output/                                  (generated results)
+│   ├── Reconciled Open AR
+│   ├── Processed Bank Receipts
+│   ├── Unmatched Bank Receipts
+│   ├── Data Quality Checks
+│   └── Summary
 ├── docs/
+│   ├── data_dictionary.md
+│   ├── prompt.md
+│   ├── reconciliation_logic.md
 │   └── scenario_coverage.md
+├── archive/                                 (superseded working copies)
 └── README.md
 ```
 

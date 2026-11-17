@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# macOS
+.DS_Store
+
+# Excel lock / temp files (created while a workbook is open in Excel)
+~$*.xlsx
+
+# Archived working copies and superseded output workbooks
+archive/
+Open_AR_Detail_Reconciled_Result *.xlsx
