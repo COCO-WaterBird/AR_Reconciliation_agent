@@ -102,7 +102,6 @@ def main() -> int:
     context = A.ExceptionContext(
         bank_transaction_id="BTRX-999999",
         value_date="2026-06-01",
-        posting_date="2026-06-01",
         customer_name="Test Customer",
         remitter_name="Test Customer",
         customer_id="CUST-0001",
@@ -116,7 +115,6 @@ def main() -> int:
         engine_reason="test",
         candidates=[
             A.Candidate(
-                ar_index=0,
                 invoice_number="INV-900175",
                 customer_id="CUST-0001",
                 customer_name="Test Customer",

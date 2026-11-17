@@ -76,8 +76,6 @@ RESULT_FILE = BASE_DIR / "Open_AR_Detail_Reconciled_Result.xlsx"
 # engine re-runs, which also makes the approval step auditable.
 APPROVAL_LEDGER_FILE = BASE_DIR / "AI_Exception_Approvals.xlsx"
 
-AR_SHEET = "Open AR"
-BANK_SHEET = "Bank Receipts"
 REVIEW_SHEET = "AI Exception Review"
 REVIEW_LOG_SHEET = "AI Exception Log"
 
@@ -101,7 +99,6 @@ AR_MATCHED_TXN_COL = "Matched Bank Transaction ID"
 
 BANK_TRANSACTION_ID_COL = "Bank Transaction ID"
 BANK_VALUE_DATE_COL = "Value Date"
-BANK_POSTING_DATE_COL = "Posting Date"
 BANK_CUSTOMER_NAME_COL = "Customer Name"
 BANK_REMITTER_NAME_COL = "Remitter Name"
 BANK_CUSTOMER_ID_COL = "ERP Customer ID"
@@ -110,8 +107,6 @@ BANK_GROSS_AMOUNT_COL = "Gross Receipt Amount"
 BANK_FEES_COL = "Bank Fees"
 BANK_NET_AMOUNT_COL = "Net Amount"
 BANK_MEMO_COL = "Memo / Remittance Detail"
-BANK_STATUS_COL = "Status"
-BANK_EXCEPTION_TYPE_COL = "Exception Type"
 
 # Review sheet columns
 REVIEW_BANK_TXN_COL = "Bank Transaction ID"
@@ -243,7 +238,6 @@ MAX_CANDIDATES_IN_PROMPT = 12
 
 # A residual larger than this share of the invoice is never a "clean" match.
 MAX_PARTIAL_RESIDUAL_RATIO = 0.10
-MIN_PARTIAL_RESIDUAL_CENTS = 100
 
 CENTS = Decimal("0.01")
 
@@ -333,7 +327,6 @@ def _parse_iso_date(value: object) -> str:
 class Candidate:
     """One open AR invoice considered as a possible match."""
 
-    ar_index: int
     invoice_number: str
     customer_id: str
     customer_name: str
@@ -344,7 +337,6 @@ class Candidate:
     dispute_reason: str
     residual_cents: int
     score: float = 0.0
-    reasons: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -353,7 +345,6 @@ class ExceptionContext:
 
     bank_transaction_id: str
     value_date: str
-    posting_date: str
     customer_name: str
     remitter_name: str
     customer_id: str
@@ -386,11 +377,6 @@ class Recommendation:
     analysed_by: str
     candidates_considered: list[str] = field(default_factory=list)
     validation_notes: list[str] = field(default_factory=list)
-
-    @property
-    def is_applicable(self) -> bool:
-        """True when this recommendation may be written back to AR."""
-        return self.recommended_action in {"Auto Match", "Recommend Match"}
 
 
 # ---------------------------------------------------------------------------
@@ -468,7 +454,7 @@ def build_candidate_pool(
     compare_gross = gross_cents if gross_cents > 0 else abs(gross_cents)
 
     candidates: list[Candidate] = []
-    for idx, row in ar_df.loc[mask].iterrows():
+    for _, row in ar_df.loc[mask].iterrows():
         invoice_number = normalize_text(row.get(AR_INVOICE_COL, ""))
         if invoice_number.upper() in excluded:
             continue
@@ -481,7 +467,6 @@ def build_candidate_pool(
         residual = min(abs(open_cents - compare_cents), abs(open_cents - compare_gross))
         candidates.append(
             Candidate(
-                ar_index=int(idx),
                 invoice_number=invoice_number,
                 customer_id=normalize_text(row.get(AR_CUSTOMER_ID_COL, "")),
                 customer_name=normalize_text(row.get(AR_CUSTOMER_NAME_COL, "")),
@@ -513,35 +498,23 @@ def score_candidates(
 
     for cand in candidates:
         score = 0.0
-        reasons: list[str] = []
 
         if cand.invoice_number.upper() in referenced:
             score += 100.0
-            reasons.append("invoice number named in the remittance memo")
 
         if cand.residual_cents == 0:
             score += 60.0
-            reasons.append("open amount equals the receipt amount exactly")
         else:
             ratio = cand.residual_cents / cand.open_amount_cents if cand.open_amount_cents else 1.0
             if ratio <= MAX_PARTIAL_RESIDUAL_RATIO:
                 score += 35.0
-                reasons.append(
-                    f"open amount is within {ratio * 100:.1f}% of the receipt amount"
-                )
             else:
                 score += max(0.0, 20.0 - ratio * 20.0)
-                reasons.append(
-                    f"open amount differs from the receipt amount by "
-                    f"{format_money(cand.residual_cents)}"
-                )
 
         if cand.dispute_reason:
             score -= 15.0
-            reasons.append(f"invoice carries a dispute: {cand.dispute_reason}")
 
         cand.score = round(score, 3)
-        cand.reasons = reasons
 
     candidates.sort(key=lambda c: (-c.score, c.residual_cents, c.invoice_number))
     return candidates
@@ -568,7 +541,6 @@ def build_context(
     return ExceptionContext(
         bank_transaction_id=normalize_text(bank_row.get(BANK_TRANSACTION_ID_COL, "")),
         value_date=_parse_iso_date(bank_row.get(BANK_VALUE_DATE_COL, "")),
-        posting_date=_parse_iso_date(bank_row.get(BANK_POSTING_DATE_COL, "")),
         customer_name=normalize_text(bank_row.get(BANK_CUSTOMER_NAME_COL, "")),
         remitter_name=normalize_text(bank_row.get(BANK_REMITTER_NAME_COL, "")),
         customer_id=normalize_text(bank_row.get(BANK_CUSTOMER_ID_COL, "")),
@@ -1610,7 +1582,6 @@ def analyse_exceptions(
     concurrency: int = 1,
     limit: int = 0,
     disable_thinking: bool = False,
-    verbose: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, list[dict[str, Any]]]:
     """
     Analyse every unmatched receipt and return the review, log and context

@@ -44,6 +44,11 @@ OUTPUT_FILE = BASE_DIR / "Open_AR_Detail_Reconciled_Result.xlsx"
 BANK_SHEET = "Bank Receipts"
 AR_SHEET   = "Open AR"
 
+# Sheets that are owned by the AI exception agent, not by this engine.  The
+# engine rewrites the output workbook from scratch on every run, so these
+# sheets have to be carried over or a reviewer's approval is destroyed.
+PRESERVED_SHEETS = ("AI Exception Review", "AI Exception Log")
+
 # ===== Bank file columns (read-only) =====
 BANK_TRANSACTION_ID_COL  = "Bank Transaction ID"
 BANK_ACCOUNT_COL         = "Bank Account"
@@ -1368,14 +1373,50 @@ def main() -> None:
     print(f"Data quality issues                : {len(data_quality_rows)}")
     print(f"Writing output workbook            : {OUTPUT_FILE.name}")
 
+    # Carry over the sheets the AI exception agent owns.  Without this a
+    # re-run of the engine would silently destroy every approval a reviewer
+    # entered in the review sheet.
+    preserved = read_preserved_sheets(OUTPUT_FILE)
+
     with pd.ExcelWriter(OUTPUT_FILE, engine="openpyxl") as writer:
         ar_output.to_excel(       writer, index=False, sheet_name="Reconciled Open AR")
         bank_output.to_excel(     writer, index=False, sheet_name="Processed Bank Receipts")
         unmatched_df.to_excel(    writer, index=False, sheet_name="Unmatched Bank Receipts")
         data_quality_df.to_excel( writer, index=False, sheet_name="Data Quality Checks")
         summary_df.to_excel(      writer, index=False, sheet_name="Summary")
+        for sheet_name, frame in preserved.items():
+            frame.to_excel(writer, index=False, sheet_name=sheet_name)
 
     print("Done.")
+
+
+def read_preserved_sheets(output_file: Path) -> dict[str, pd.DataFrame]:
+    """
+    Read the sheets this engine does not own, so they survive a re-run.
+
+    The AI exception agent writes its review sheet into this workbook.  The
+    engine regenerates the workbook from scratch, which would otherwise throw
+    the review sheet - and with it every human approval - away.
+    """
+    preserved: dict[str, pd.DataFrame] = {}
+    if not output_file.exists():
+        return preserved
+    try:
+        excel = pd.ExcelFile(output_file)
+    except Exception:
+        return preserved
+
+    for sheet_name in PRESERVED_SHEETS:
+        if sheet_name not in excel.sheet_names:
+            continue
+        try:
+            frame = pd.read_excel(output_file, sheet_name=sheet_name)
+        except Exception:
+            continue
+        if not frame.empty:
+            preserved[sheet_name] = frame
+
+    return preserved
 
 
 if __name__ == "__main__":
