@@ -17,7 +17,7 @@ Run the AI Exception Resolution Agent against a local Ollama model.
    Or the free deterministic backend, which needs neither an API key nor a
    local model:
 
-       python ai_exception_agent.py
+       python scripts/run_agent.py
 
 When you do want a local model - for example because the data must not leave
 the machine - this wrapper caps the resources it uses:
@@ -158,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
         "\nNote: a local model loads its weights into this machine's RAM and uses\n"
         "      its CPU.  The limits above keep that in check.  For a run that\n"
         "      leaves the machine alone, use the paid API instead:\n"
-        "          python run_openai.py\n"
+        "          python scripts/run_openai.py\n"
     )
 
     started = time.time()

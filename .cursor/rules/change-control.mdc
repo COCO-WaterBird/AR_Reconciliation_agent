@@ -1,0 +1,171 @@
+---
+description: Change control rules for the AR Reconciliation Agent. Apply to every task in this repository.
+globs: ["**/*.py", "**/*.md", "**/*.toml", "**/*.yml", "**/*.yaml", "**/*.json"]
+alwaysApply: true
+---
+
+# Agent Development Rules — Minimal Changes Only
+
+## 1. Core Principle
+
+Always make the smallest possible change that satisfies the user's request.
+
+- Do NOT refactor existing code unless explicitly requested.
+- Do NOT redesign the architecture without approval.
+- Do NOT introduce new frameworks, dependencies, or abstractions without approval.
+- Do NOT modify unrelated files.
+- Do NOT rename existing functions, classes, or files unless necessary.
+- Preserve all existing working functionality.
+
+## 2. Scope Control
+
+Before making changes:
+
+1. Identify the exact requirement.
+2. Identify the minimum files that need modification.
+3. Determine whether the task requires a structural change.
+4. If structural changes are required, explain why and request approval.
+
+For small, clearly scoped tasks, proceed without asking unnecessary questions.
+
+## 3. Refactoring Restrictions
+
+Refactoring is prohibited by default.
+
+The Agent must obtain explicit approval before:
+
+- Changing project architecture.
+- Moving or renaming files.
+- Reorganizing directories.
+- Modifying database schemas.
+- Replacing existing libraries.
+- Changing public API contracts.
+- Rewriting working modules.
+- Modifying more than 3 files for a simple task.
+
+If a better architecture is identified, document the recommendation separately. Do not implement it automatically.
+
+## 4. Minimal Diff Policy
+
+Prefer minimal patches over complete file rewrites.
+
+- Modify only the necessary lines.
+- Preserve existing naming conventions.
+- Preserve existing business logic.
+- Avoid unrelated cleanup.
+- Do not add speculative features.
+
+## 5. Token Efficiency
+
+Minimize unnecessary exploration and output.
+
+- Read only relevant files.
+- Do not repeatedly scan the entire repository.
+- Avoid generating lengthy explanations.
+- Do not run broad refactoring operations.
+- Use focused tests instead of the full test suite when appropriate.
+
+## 6. Autonomous Execution
+
+The Agent may autonomously:
+
+- Fix small bugs.
+- Implement explicitly requested features within the approved scope.
+- Run relevant tests.
+- Fix errors directly caused by its changes.
+
+The Agent must request approval before:
+
+- Large refactoring.
+- Destructive operations.
+- Database migrations.
+- Architectural changes.
+- Changes outside the approved scope.
+
+## 7. Completion Report
+
+After each task, provide:
+
+1. Files changed.
+2. Summary of modifications.
+3. Tests executed and results.
+4. Any unresolved issues.
+
+Keep the report concise.
+
+## 8. Stop Conditions
+
+Stop and request approval if:
+
+- The task requires unexpected architectural changes.
+- More than 3 files must be modified for a simple request.
+- The implementation would break backward compatibility.
+- Existing business logic must be substantially changed.
+
+Never expand the scope without explicit authorization.
+
+## 9. Project-Specific Guards
+
+These are specific to the AR Reconciliation Agent and take precedence over
+general preferences above.
+
+### Financial business logic is immutable without a Product Owner decision
+
+The following are the product, not the implementation. Changing any of them
+changes how the company reconciles:
+
+- Amount tolerances and the rounding tolerance (`rules/policies.py`).
+- The partial/residual allowance scenarios and the residual ratio caps.
+- The review-only scenario sets (`ENGINE_REVIEW_ONLY_SCENARIOS`,
+  `AGENT_REVIEW_ONLY_SCENARIOS`, `HOLD_ONLY_SCENARIOS`).
+- The controlled exception taxonomy, confidence levels and recommended actions.
+- The human approval gate: only `APPROVE` in the review sheet may move cash.
+
+If a task appears to require changing one of these, stop and ask the Finance
+Product Owner. Do not "improve" a threshold because it looks odd.
+
+### Source data is read-only
+
+The workbooks in `data/input/` are never written to. Every result goes into a
+new output column. The control invariant that must hold on every run is:
+
+    SUM(Applied Amount across matched AR rows) == SUM(Bank gross receipts)
+
+If a change makes the control difference non-zero, the change is wrong.
+
+### The AI agent advises, it never decides
+
+The agent may only recommend. A recommendation reaches AR only after a human
+sets `Approval = APPROVE`. The validator in `agent/validator.py` enforces this
+and must not be weakened.
+
+### Keep the repository root clean
+
+The top-level modules `auto_reconcile_na.py`, `ai_exception_agent.py`,
+`core.py`, `check_regression.py`, `run_openai.py` and `run_local_model.py` were
+backward-compatible entry points for existing users. They were removed once the
+external usage was confirmed to be nil. Do not recreate them, and do not add
+new top-level scripts: put entry points in `scripts/` and library code in
+`src/ar_reconciliation/`.
+
+### Verify against the baseline before declaring a task done
+
+Run the focused tests for the change, and before finishing any change that
+touches the matching engine or the agent, run:
+
+```bash
+python scripts/check_regression.py data/baseline.json
+```
+
+It must report "No regression: all baseline metrics match." The expected
+figures are 136 receipts matched, 158 invoice rows, 64 unmatched, and
+$709,365.05 applied on both sides with a $0.00 control difference.
+
+### Repository layout
+
+- Library code lives in `src/ar_reconciliation/`.
+- Runnable entry points live in `scripts/`.
+- Tests live in `tests/`, documentation in `docs/`.
+- Source workbooks in `data/input/`, run output in `data/output/`.
+
+Do not move files between these locations without approval (see Rule 3).

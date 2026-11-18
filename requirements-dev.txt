@@ -1,3 +1,4 @@
 # Test and development dependencies. Install with:
 #     python -m pip install -r requirements.txt -r requirements-dev.txt
 pytest>=8.0
+matplotlib>=3.8   # scripts/make_images.py - regenerates the README images

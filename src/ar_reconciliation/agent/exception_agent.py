@@ -367,7 +367,7 @@ def analyse_exceptions(
     """
     if not result_path.exists():
         raise FileNotFoundError(
-            f"{result_path.name} was not found. Run auto_reconcile_na.py first to produce it."
+            f"{result_path.name} was not found. Run scripts/run_reconciliation.py first to produce it."
         )
 
     result_df = pd.read_excel(result_path, sheet_name="Processed Bank Receipts")
@@ -544,7 +544,7 @@ def read_existing_approvals(result_path: Path) -> dict[str, dict[str, Any]]:
       1. The review sheet inside the result workbook.  This is where the
          reviewer works, so a decision entered there always wins.
       2. The sidecar ledger.  This restores the decisions that were lost when
-         auto_reconcile_na.py regenerated the workbook.
+         the reconciliation engine regenerated the workbook.
 
     The ledger is only consulted for receipts the workbook has no decision
     for, so a fresh edit in the workbook is never overwritten by a stale
