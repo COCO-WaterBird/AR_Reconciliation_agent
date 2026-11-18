@@ -202,6 +202,49 @@ def main() -> int:
             f"the schema probe fired {len(probes)} times under concurrency, expected exactly 1"
         )
 
+    # --- The local-model resource limits must reach the endpoint ---
+    #
+    # A local model on a laptop will otherwise keep its weights resident and
+    # use every core, which is enough to make the machine unusable.  These
+    # limits are what keeps a local run affordable, so they must actually be
+    # sent rather than silently dropped.
+    FakeHandler.received.clear()
+    limited_backend = A.LLMBackend(
+        api_key="test-key",
+        model="test-model",
+        base_url=f"http://127.0.0.1:{port}/v1",
+        num_ctx=2048,
+        num_thread=4,
+        keep_alive="0",
+    )
+    limited_backend.analyse(context)
+
+    if not FakeHandler.received:
+        failures.append("the limited backend sent no request")
+    else:
+        sent = FakeHandler.received[-1]
+        options = sent.get("options", {})
+        if options.get("num_ctx") != 2048:
+            failures.append(f"num_ctx was not sent to the endpoint (got {options.get('num_ctx')!r})")
+        if options.get("num_thread") != 4:
+            failures.append(f"num_thread was not sent to the endpoint (got {options.get('num_thread')!r})")
+        if sent.get("keep_alive") != "0":
+            failures.append(f"keep_alive was not sent to the endpoint (got {sent.get('keep_alive')!r})")
+
+    # Without the limits, nothing extra may be sent, so a hosted endpoint is
+    # not given keys it does not understand.
+    FakeHandler.received.clear()
+    plain_backend = A.LLMBackend(
+        api_key="test-key",
+        model="test-model",
+        base_url=f"http://127.0.0.1:{port}/v1",
+    )
+    plain_backend.analyse(context)
+    if FakeHandler.received:
+        sent = FakeHandler.received[-1]
+        if "options" in sent or "keep_alive" in sent:
+            failures.append("resource limits were sent even though none were configured")
+
     server.shutdown()
 
     if failures:

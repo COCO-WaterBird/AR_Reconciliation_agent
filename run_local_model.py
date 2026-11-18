@@ -1,23 +1,42 @@
 """
 Run the AI Exception Resolution Agent against a local Ollama model.
 
-This is a convenience wrapper that runs the agent with the LLM backend against
-a local (free, offline) model.  It exists because a local model needs a few
-different settings than a hosted API:
+.. warning::
 
-  * a longer timeout, because a 7B model on a laptop takes 20-50 seconds per
-    receipt;
-  * a concurrency setting, because the requests are I/O bound while the model
-    generates and the wall clock drops sharply with a small thread pool.
+   This path is **resource heavy** and is kept only as an offline option.
+   A 7B model keeps 4-5 GB resident in RAM and will use every CPU core unless
+   it is told otherwise; on a 16 GB laptop that is enough to make the desktop
+   unusable.
+
+   For normal use prefer the paid API, which runs on OpenAI's servers and
+   leaves this machine alone:
+
+       export OPENAI_API_KEY=sk-...
+       python run_openai.py
+
+   Or the free deterministic backend, which needs neither an API key nor a
+   local model:
+
+       python ai_exception_agent.py
+
+When you do want a local model - for example because the data must not leave
+the machine - this wrapper caps the resources it uses:
+
+  * ``--concurrency 1`` so only one receipt is in flight at a time;
+  * ``--num-ctx 2048`` so the KV cache stays small;
+  * ``--num-thread 4`` so the model leaves CPU for the rest of the machine;
+  * ``--keep-alive 0`` so the model is unloaded from RAM as soon as the run
+    finishes and the memory is given back.
 
 Usage
 -----
-    python run_local_model.py --model qwen2.5:7b --concurrency 4
+    python run_local_model.py                                    # light profile
+    python run_local_model.py --model qwen2.5:3b                 # smallest model
     python run_local_model.py --model qwen2.5:7b --limit 10      # smoke test
-    python run_local_model.py --list                              # show installed models
+    python run_local_model.py --list                             # show installed models
 
-The model is not required: without --model the agent runs its deterministic
-offline backend, which needs no model at all.
+    # Faster, but heavier on the machine:
+    python run_local_model.py --concurrency 2 --num-thread 8 --keep-alive 5m
 """
 
 from __future__ import annotations
@@ -33,7 +52,14 @@ from pathlib import Path
 import ai_exception_agent as A
 
 DEFAULT_BASE_URL = "http://localhost:11434/v1"
-DEFAULT_MODEL = "qwen2.5:7b"
+DEFAULT_MODEL = "qwen2.5:3b"
+
+# Light defaults.  A local model on a laptop otherwise keeps 4-5 GB resident
+# and saturates every core, which makes the machine unusable for anything else.
+DEFAULT_CONCURRENCY = 1
+DEFAULT_NUM_CTX = 2048
+DEFAULT_NUM_THREAD = 4
+DEFAULT_KEEP_ALIVE = "0"
 
 
 def list_local_models(base_url: str) -> list[dict]:
@@ -77,8 +103,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--concurrency",
         type=int,
-        default=4,
-        help="Receipts analysed in parallel (default: %(default)s)",
+        default=DEFAULT_CONCURRENCY,
+        help="Receipts analysed in parallel (default: %(default)s). Keep this at 1 on a "
+        "laptop; more workers means more CPU contention, not more throughput.",
+    )
+    parser.add_argument(
+        "--num-ctx",
+        type=int,
+        default=DEFAULT_NUM_CTX,
+        help="Context window in tokens. A smaller window keeps the KV cache and the "
+        "memory footprint down (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--num-thread",
+        type=int,
+        default=DEFAULT_NUM_THREAD,
+        help="CPU threads the model may use. Capping it leaves the machine usable "
+        "while the model runs (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--keep-alive",
+        default=DEFAULT_KEEP_ALIVE,
+        help="How long the model stays in RAM after the run, e.g. '5m'. '0' unloads it "
+        "immediately and gives the memory back (default: %(default)s)",
     )
     parser.add_argument(
         "--limit",
@@ -98,7 +145,16 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"\nModel     : {args.model}")
     print(f"Base URL  : {args.base_url}")
-    print(f"Parallel  : {args.concurrency}\n")
+    print(f"Parallel  : {args.concurrency}")
+    print(f"Context   : {args.num_ctx} tokens")
+    print(f"Threads   : {args.num_thread}")
+    print(f"Keep alive: {args.keep_alive}")
+    print(
+        "\nNote: a local model loads its weights into this machine's RAM and uses\n"
+        "      its CPU.  The limits above keep that in check.  For a run that\n"
+        "      leaves the machine alone, use the paid API instead:\n"
+        "          python run_openai.py\n"
+    )
 
     started = time.time()
 
@@ -130,6 +186,12 @@ def run_agent(result_path: Path, args: argparse.Namespace, limit: int) -> int:
         "--api-key", args.api_key,
         "--concurrency", str(args.concurrency),
     ]
+    if args.num_ctx:
+        argv.extend(["--num-ctx", str(args.num_ctx)])
+    if args.num_thread:
+        argv.extend(["--num-thread", str(args.num_thread)])
+    if args.keep_alive is not None:
+        argv.extend(["--keep-alive", str(args.keep_alive)])
     if limit > 0:
         argv.extend(["--limit", str(limit)])
     return A.main(argv)
