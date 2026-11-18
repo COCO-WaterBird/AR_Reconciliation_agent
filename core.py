@@ -149,8 +149,11 @@ def money_to_cents(value: object) -> int:
         # spaced out: "1,234.56" must become "1234.56", not "1 234.56".
         text = upper.replace("$", "").replace(",", "").strip()
 
+        # The original cell was not blank, so neither is the text left after
+        # stripping the currency decoration.  A value like "$" or "USD" on its
+        # own is malformed, not zero, and must not pass as a real amount.
         if not text:
-            return 0
+            raise MoneyParseError(f"Cannot parse money value: {value!r}")
 
         try:
             dec = Decimal(text)

@@ -152,6 +152,7 @@ written back to AR after a human sets `Approval = APPROVE` in the review sheet.
 ├── auto_reconcile_na.py            # Deterministic reconciliation engine
 ├── ai_exception_agent.py           # AI exception resolution agent
 ├── core.py                         # Shared cell/money/text primitives
+├── check_regression.py             # Compare a run against the stored baseline
 ├── run_local_model.py              # Convenience wrapper for a local (free) model
 ├── run_openai.py                   # Convenience wrapper for the OpenAI API
 ├── test_llm_backend.py             # Offline test for the LLM code path
@@ -159,6 +160,13 @@ written back to AR after a human sets `Approval = APPROVE` in the review sheet.
 ├── Open_AR_Detail.xlsx             # Input (read-only): 191 open AR rows
 ├── Open_AR_Detail_Reconciled_Result.xlsx   # Output: reconciliation workbook
 ├── AI_Exception_Approvals.xlsx     # Output: durable review / approval ledger
+├── baseline.json                   # Metrics a run must reproduce
+├── tests/                          # pytest suite
+│   ├── conftest.py
+│   ├── test_core.py
+│   ├── test_engine.py
+│   ├── test_agent.py
+│   └── test_approval_workflow.py
 ├── docs/
 │   ├── data_dictionary.md
 │   ├── reconciliation_logic.md
@@ -166,6 +174,7 @@ written back to AR after a human sets `Approval = APPROVE` in the review sheet.
 │   ├── ai_exception_agent.md
 │   ├── local_models.md
 │   └── prompt.md
+├── .github/workflows/ci.yml        # Continuous integration
 ├── .gitignore
 └── README.md
 ```
@@ -235,6 +244,54 @@ python ai_exception_agent.py --apply-approved
 
 Only the approved rows are applied to AR. The control totals are re-verified
 afterwards, and the workbook is left untouched if they do not balance.
+
+### 6. Run the tests
+
+```bash
+python -m pip install -r requirements.txt -r requirements-dev.txt
+python -m pytest tests/
+```
+
+The suite covers the money and text primitives, the matching engine, the AI
+agent's safety rules and the human approval gate. It runs against the sample
+data in this repository, so it exercises the real rules rather than a model of
+them.
+
+---
+
+## Testing
+
+The matching rules are the most valuable thing in this project, and they are
+also the easiest thing to break by accident. Every rule change is therefore
+guarded by a test.
+
+| Suite | What it covers |
+|---|---|
+| `tests/test_core.py` | Money parsing, text keys, blank detection. The edge cases that decide whether a control total is right. |
+| `tests/test_engine.py` | The nine behaviours in [Scenario Coverage](docs/scenario_coverage.md), plus the invariants that hold on every run: source columns untouched, no receipt applied twice, control totals balance, no receipt silently dropped. |
+| `tests/test_agent.py` | The validator: an invoice outside the candidate pool is discarded, an amount above the cash is capped, a residual is recomputed from the AR data, a review-only scenario is never auto-matched. |
+| `tests/test_approval_workflow.py` | The approval gate: nothing is applied without an explicit approval, applying twice is idempotent, and the control totals still balance afterwards. |
+
+### The regression baseline
+
+`baseline.json` stores the metrics a run must reproduce: row counts, the
+applied-amount control totals, the status distribution and the match methods.
+`check_regression.py` compares a fresh run against it:
+
+```bash
+python check_regression.py baseline.json
+```
+
+This answers "did the numbers move?" in one command, which is the question
+you want answered before every release. If a matching rule is changed on
+purpose, re-record the baseline and update the tables in
+[Scenario Coverage](docs/scenario_coverage.md) in the same change.
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs the test suite, the offline LLM check, the
+full pipeline and the baseline comparison on every push and pull request, on
+Python 3.12 and 3.13.
 
 ---
 
@@ -493,6 +550,9 @@ decisions, so they survive a re-run of the reconciliation engine.
 - Exception reporting and control totals
 - AI exception analysis with a deterministic and an LLM backend
 - Human approval gate with a durable ledger and idempotent write-back
+- Automated test suite covering the matching rules, the AI safety rules and
+  the approval gate
+- Continuous integration with a stored regression baseline
 
 **Not implemented**
 
@@ -507,6 +567,7 @@ decisions, so they survive a re-run of the reconciliation engine.
 
 - [x] Phase 1 — Rule-based reconciliation engine
 - [x] Phase 4 — AI Exception Resolution Agent
+- [x] Test suite and CI with a regression baseline
 - [ ] Phase 2 — FastAPI service
 - [ ] Phase 3 — PostgreSQL
 - [ ] Phase 5 — Human approval workflow

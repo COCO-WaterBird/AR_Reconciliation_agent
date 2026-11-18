@@ -1,0 +1,14 @@
+# Core dependencies for the reconciliation engine and the AI exception agent.
+#
+# pandas 3.x is supported: the engine casts its output columns to object
+# dtype so they can hold both dates and joined strings.
+pandas>=2.0
+openpyxl>=3.1
+
+# Only needed for the LLM backend (--backend llm). The rules backend and the
+# deterministic engine do not import it.
+openai>=1.0
+
+# Test dependencies. Install with:
+#     python -m pip install -r requirements.txt -r requirements-dev.txt
+pytest>=8.0

@@ -107,6 +107,15 @@ A successful test run should show that:
 8. Data quality issues are captured separately in the `Data Quality Checks` sheet.
 9. The AR and bank control totals agree, and the control difference is zero.
 
+These nine behaviours are asserted directly in `tests/test_engine.py`, so the
+statements above are checked on every push rather than only by inspection.
+
+To check that a run reproduces the numbers below, use the stored baseline:
+
+```bash
+python check_regression.py baseline.json
+```
+
 ## Verified Baseline
 
 The following baseline was produced by running the automation against the

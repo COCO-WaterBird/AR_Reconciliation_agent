@@ -1072,10 +1072,26 @@ def mark_duplicate_receipt(
 # Main
 # ---------------------------------------------------------------------------
 
-def main() -> None:
+def main(
+    bank_path: Path | None = None,
+    ar_path: Path | None = None,
+    output_path: Path | None = None,
+) -> None:
+    """
+    Run the reconciliation.
+
+    The paths default to the sample workbooks that ship with the project, so
+    the zero-argument call is the normal way to run this.  They are
+    parameters so that a test - or a caller with a different dataset - can
+    point the engine at other files without reaching into module globals.
+    """
+    bank_path   = Path(bank_path)   if bank_path   is not None else BANK_FILE
+    ar_path     = Path(ar_path)     if ar_path     is not None else AR_FILE
+    output_path = Path(output_path) if output_path is not None else OUTPUT_FILE
+
     print("Reading input workbooks...")
-    bank_df = pd.read_excel(BANK_FILE, sheet_name=BANK_SHEET)
-    ar_df   = pd.read_excel(AR_FILE,   sheet_name=AR_SHEET)
+    bank_df = pd.read_excel(bank_path, sheet_name=BANK_SHEET)
+    ar_df   = pd.read_excel(ar_path,   sheet_name=AR_SHEET)
 
     require_columns(
         bank_df,
@@ -1505,7 +1521,7 @@ def main() -> None:
             ["Reconciled AR applied amount",          cents_to_money(reconciled_ar_total_cents)],
             ["Reconciled bank applied amount",        cents_to_money(reconciled_bank_total_cents)],
             ["Reconciled control difference",         cents_to_money(reconciliation_difference_cents)],
-            ["Output file",                           OUTPUT_FILE.name],
+            ["Output file",                           output_path.name],
         ],
         columns=["Metric", "Value"],
     )
@@ -1515,14 +1531,14 @@ def main() -> None:
     print(f"Pending review receipts            : {pending_review_count}")
     print(f"Unmatched / exception bank receipts: {len(unmatched_bank_rows)}")
     print(f"Data quality issues                : {len(data_quality_rows)}")
-    print(f"Writing output workbook            : {OUTPUT_FILE.name}")
+    print(f"Writing output workbook            : {output_path.name}")
 
     # Carry over the sheets the AI exception agent owns.  Without this a
     # re-run of the engine would silently destroy every approval a reviewer
     # entered in the review sheet.
-    preserved = read_preserved_sheets(OUTPUT_FILE)
+    preserved = read_preserved_sheets(output_path)
 
-    with pd.ExcelWriter(OUTPUT_FILE, engine="openpyxl") as writer:
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         ar_output.to_excel(       writer, index=False, sheet_name="Reconciled Open AR")
         bank_output.to_excel(     writer, index=False, sheet_name="Processed Bank Receipts")
         unmatched_df.to_excel(    writer, index=False, sheet_name="Unmatched Bank Receipts")
@@ -1531,7 +1547,7 @@ def main() -> None:
         for sheet_name, frame in preserved.items():
             frame.to_excel(writer, index=False, sheet_name=sheet_name)
 
-    apply_workbook_formatting(OUTPUT_FILE)
+    apply_workbook_formatting(output_path)
 
     print("Done.")
 

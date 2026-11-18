@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 is what the README documents; 3.13 is what the project is
+        # developed against.
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+
+      - name: Run the test suite
+        run: python -m pytest tests/ -v
+
+      - name: Run the offline LLM backend check
+        run: python test_llm_backend.py
+
+      - name: Run the reconciliation end to end
+        run: |
+          python auto_reconcile_na.py
+          python ai_exception_agent.py
+          python ai_exception_agent.py --apply-approved
+
+      - name: Check the run against the stored baseline
+        run: python check_regression.py baseline.json
