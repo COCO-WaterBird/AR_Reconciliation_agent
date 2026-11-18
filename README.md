@@ -151,7 +151,9 @@ written back to AR after a human sets `Approval = APPROVE` in the review sheet.
 .
 ├── auto_reconcile_na.py            # Deterministic reconciliation engine
 ├── ai_exception_agent.py           # AI exception resolution agent
+├── core.py                         # Shared cell/money/text primitives
 ├── run_local_model.py              # Convenience wrapper for a local (free) model
+├── run_openai.py                   # Convenience wrapper for the OpenAI API
 ├── test_llm_backend.py             # Offline test for the LLM code path
 ├── Bank_Cash_Receipts.xlsx         # Input (read-only): 200 bank receipts
 ├── Open_AR_Detail.xlsx             # Input (read-only): 191 open AR rows
@@ -164,7 +166,6 @@ written back to AR after a human sets `Approval = APPROVE` in the review sheet.
 │   ├── ai_exception_agent.md
 │   ├── local_models.md
 │   └── prompt.md
-├── archive/                        # Superseded working copies
 ├── .gitignore
 └── README.md
 ```
@@ -178,11 +179,11 @@ written back to AR after a human sets `Approval = APPROVE` in the review sheet.
 ```bash
 python -m venv venv
 source venv/bin/activate
-python -m pip install pandas openpyxl
-
-# Optional, only for the LLM backend of the AI agent
-python -m pip install openai
+python -m pip install -r requirements.txt
 ```
+
+`requirements.txt` installs `pandas`, `openpyxl` and `openai`. The engine and the
+rules backend need only the first two; `openai` is used by the LLM backend.
 
 ### 2. Run the reconciliation engine
 
@@ -319,6 +320,26 @@ an invoice that a memo-referenced receipt already named.
 never written to. Every result goes into new output columns, with the suggested
 status in `Suggested Recon Status` and `Suggested Bank Status`.
 
+### Shared primitives (`core.py`)
+
+The engine and the AI agent both need to turn spreadsheet cells into comparable
+values. Those conversions live in `core.py` so there is exactly one definition
+of what a cell means:
+
+- `money_to_cents` / `cents_to_money` — money as integer cents, half-up rounding.
+- `normalize_text` / `normalize_key` / `normalize_invoice` — canonical text keys.
+- `is_blank` — what counts as an empty cell.
+
+Two rules hold everywhere:
+
+1. **Money parsing never guesses.** A value that cannot be read as an amount
+   raises `MoneyParseError` instead of collapsing to zero. A silent zero is
+   dangerous because every downstream control total — including the AI
+   recommendation validator — would treat it as a real value and confirm it.
+2. **Text keys are canonical.** `ACME-CORP`, `ACME Corp.` and `acme corp` all
+   produce the same key, so the customer-name and invoice fallbacks behave the
+   same on both sides of the pipeline.
+
 ---
 
 ## AI Exception Resolution Agent
@@ -426,6 +447,28 @@ approval is dropped and the row goes back for review.
 | Summary | Run metrics and the AR/bank control total check. |
 | AI Exception Review | The AI agent's recommendation for each unmatched receipt, with the approval column. |
 | AI Exception Log | Every validation repair, model error and apply outcome. |
+
+Every reviewable sheet has a frozen header row and an auto-filter, so the
+reviewer can narrow a 200-row sheet down to the receipts they need to act on.
+
+### Reading the `Unmatched Bank Receipts` sheet
+
+The sheet carries what a reviewer needs to judge a receipt without opening the
+AR workbook:
+
+| Column | Meaning |
+|---|---|
+| `Reason` | Why the engine could not reconcile the receipt. |
+| `Candidate Invoice Count` | How many open AR invoices exist for this customer and currency. |
+| `Candidate Open AR Total` | What those open invoices are worth in total. |
+| `Suggested Invoices` | The open invoices the receipt most plausibly belongs to. |
+| `Suggested Open Amount` | What those suggested invoices are worth. |
+| `Receipt vs Open Difference` | How far the receipt is from settling them. |
+
+A difference of `0.00` usually means the receipt would settle the invoice
+exactly but was held back for another reason (a collector hold, a tax
+withholding, a dispute) — the reviewer only has to confirm that reason, not
+re-derive the match.
 
 ### `AI_Exception_Approvals.xlsx`
 

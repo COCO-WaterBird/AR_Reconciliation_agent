@@ -34,6 +34,14 @@ import re
 
 import pandas as pd
 
+from core import (
+    cents_to_money,
+    money_to_cents,
+    normalize_invoice,
+    normalize_key,
+    normalize_text,
+)
+
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -163,51 +171,9 @@ NAME_FALLBACK_SCENARIOS = {
 # Utility helpers
 # ---------------------------------------------------------------------------
 
-def normalize_text(value: object) -> str:
-    if pd.isna(value):
-        return ""
-    return str(value).strip()
-
-
-def normalize_key(value: object) -> str:
-    return normalize_text(value).upper().replace(" ", "")
-
-
-def normalize_invoice(value: object) -> str:
-    return normalize_text(value).upper()
-
-
-def money_to_cents(value: object) -> int:
-    """Convert Excel money values such as $1,234.56 or (1,234.56) to integer cents."""
-    if pd.isna(value):
-        return 0
-    if isinstance(value, (int, float)):
-        dec = Decimal(str(value))
-    else:
-        text = str(value).strip()
-        if text == "":
-            return 0
-        negative = text.startswith("(") and text.endswith(")")
-        text = (
-            text.replace("$", "")
-            .replace("USD", "")
-            .replace("CAD", "")
-            .replace(",", "")
-            .replace("(", "")
-            .replace(")", "")
-            .strip()
-        )
-        try:
-            dec = Decimal(text)
-        except InvalidOperation as exc:
-            raise ValueError(f"Cannot parse money value: {value!r}") from exc
-        if negative:
-            dec = -dec
-    return int((dec * Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-
-
-def cents_to_money(cents: int) -> float:
-    return float(Decimal(cents) / Decimal("100"))
+# These live in core.py so that the engine and the AI exception agent share
+# one definition of "what a cell means".  See core.py for why the parse
+# behaviour has to be identical on both sides.
 
 
 def extract_invoice_numbers(value: object) -> list[str]:
@@ -344,10 +310,20 @@ def require_columns(df: pd.DataFrame, required: list[str], file_label: str) -> N
 
 
 def ensure_output_columns(df: pd.DataFrame, columns: list[str]) -> None:
+    """
+    Make sure every output column exists and can hold mixed content.
+
+    These columns receive both strings ("2026-06-01, 2026-06-24" for a
+    multi-payment invoice) and date objects, so they have to be plain object
+    columns.  Assigning "" to a new column yields the pandas 3 ``str`` dtype,
+    which rejects a Timestamp, hence the explicit dtype.
+    """
     for col in columns:
         if col not in df.columns:
-            df[col] = ""
+            df[col] = pd.Series([""] * len(df), index=df.index, dtype=object)
         elif df[col].dtype.kind == "f":
+            df[col] = df[col].astype("object")
+        elif df[col].dtype != object:
             df[col] = df[col].astype("object")
 
 
@@ -750,7 +726,17 @@ def append_unmatched(
     extracted_invoices: str = "",
     candidate_count: int | None = None,
     candidate_total: float | None = None,
+    suggested_invoices: str = "",
+    suggested_open_amount: float | None = None,
+    difference: float | None = None,
 ) -> None:
+    """
+    Record one receipt that could not be auto-reconciled.
+
+    The row carries everything a reviewer needs to judge the receipt without
+    opening the AR workbook: which invoices are still open, how much they
+    are worth, and how far the receipt is from settling them.
+    """
     row: dict[str, object] = {
         "Bank Transaction ID":      bank_row.get(BANK_TRANSACTION_ID_COL, ""),
         "Value Date":               bank_row.get(BANK_VALUE_DATE_COL, ""),
@@ -771,7 +757,104 @@ def append_unmatched(
         row["Candidate Invoice Count"] = candidate_count
     if candidate_total is not None:
         row["Candidate Open AR Total"] = candidate_total
+    if suggested_invoices:
+        row["Suggested Invoices"] = suggested_invoices
+    if suggested_open_amount is not None:
+        row["Suggested Open Amount"] = suggested_open_amount
+    if difference is not None:
+        row["Receipt vs Open Difference"] = difference
     unmatched_rows.append(row)
+
+
+def route_to_review(
+    bank_df: pd.DataFrame,
+    bank_index: int,
+    bank_row: pd.Series,
+    reason: str,
+    unmatched_rows: list[dict[str, object]],
+    scenario: str = "",
+    extracted_invoices: str = "",
+    status: str = "Pending Review",
+    candidate_info: dict[str, object] | None = None,
+) -> None:
+    """
+    Send one receipt to the review queue and record why.
+
+    Every receipt that cannot be auto-reconciled goes through this one
+    function, so the notes, the suggested status and the review-sheet row
+    always agree with each other.  Keeping this in a single place is what
+    stops a new output column from being added to one branch and forgotten
+    in the other four.
+    """
+    info = candidate_info or {}
+
+    append_unmatched(
+        unmatched_rows,
+        bank_row,
+        reason,
+        scenario,
+        extracted_invoices,
+        candidate_count=info.get("candidate_count"),
+        candidate_total=info.get("candidate_total"),
+        suggested_invoices=info.get("suggested_invoices", ""),
+        suggested_open_amount=info.get("suggested_open_amount"),
+        difference=info.get("difference"),
+    )
+    bank_df.at[bank_index, BANK_PROCESSING_NOTES_COL]     = reason
+    bank_df.at[bank_index, OUT_SUGGESTED_BANK_STATUS_COL] = status
+
+
+def summarise_candidates(
+    ar_df: pd.DataFrame,
+    candidates_df: pd.DataFrame,
+    invoice_numbers: list[str],
+    target_gross_cents: int,
+) -> dict[str, object]:
+    """
+    Describe the open AR a receipt could plausibly belong to.
+
+    Two groups are reported:
+
+      * the invoices the memo names explicitly, and
+      * the remaining open invoices for the same customer and currency.
+
+    The reviewer can then see not only what is open, but how far the receipt
+    is from settling it.
+    """
+    candidate_count = len(candidates_df)
+    candidate_total_cents = int(candidates_df["__ar_open_amount_cents"].sum())
+
+    suggested_invoices = ""
+    suggested_open_cents: int | None = None
+    difference: float | None = None
+
+    # Prefer the invoices the memo names: they are the strongest evidence of
+    # intent, so they are what a reviewer should look at first.
+    referenced = candidates_df[candidates_df["__invoice_key"].isin(
+        [normalize_invoice(v) for v in invoice_numbers]
+    )]
+
+    if not referenced.empty:
+        suggested = referenced
+    else:
+        suggested = candidates_df
+
+    if not suggested.empty:
+        suggested_invoices = ", ".join(
+            suggested[AR_INVOICE_COL].astype(str).tolist()[:5]
+        )
+        suggested_open_cents = int(suggested["__ar_open_amount_cents"].sum())
+        difference = cents_to_money(abs(target_gross_cents - suggested_open_cents))
+
+    return {
+        "candidate_count": candidate_count,
+        "candidate_total": cents_to_money(candidate_total_cents),
+        "suggested_invoices": suggested_invoices,
+        "suggested_open_amount": (
+            cents_to_money(suggested_open_cents) if suggested_open_cents is not None else None
+        ),
+        "difference": difference,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -951,6 +1034,7 @@ def mark_duplicate_receipt(
     original_transaction_id: str,
     invoice_numbers: list[str],
     unmatched_bank_rows: list[dict[str, object]],
+    candidate_info: dict[str, object] | None = None,
 ) -> None:
     current_transaction_id = normalize_text(bank_row.get(BANK_TRANSACTION_ID_COL, ""))
     extracted_invoices = ", ".join(invoice_numbers)
@@ -961,12 +1045,18 @@ def mark_duplicate_receipt(
         f"was not applied to AR."
     )
 
+    info = candidate_info or {}
     append_unmatched(
         unmatched_bank_rows,
         bank_row,
         reason,
         scenario="Duplicate Review",
         extracted_invoices=extracted_invoices,
+        candidate_count=info.get("candidate_count"),
+        candidate_total=info.get("candidate_total"),
+        suggested_invoices=info.get("suggested_invoices", ""),
+        suggested_open_amount=info.get("suggested_open_amount"),
+        difference=info.get("difference"),
     )
 
     bank_df.at[bank_index, BANK_RECON_BATCH_ID_COL] = ""
@@ -1176,6 +1266,25 @@ def main() -> None:
             invoice_numbers=invoice_numbers,
         )
 
+        # The candidate pool is worked out before any of the early exits
+        # below, so that every receipt that reaches the review sheet carries
+        # the open AR it could plausibly belong to - including the receipts
+        # that are rejected for a reason unrelated to matching (a duplicate,
+        # a bad amount, a review-only scenario).
+        alt_customer_keys = build_name_fallback_keys(ar_df, bank_row)
+        customer_key = bank_row["__customer_key"]
+        currency_key = bank_row["__currency_key"]
+        ar_mask      = build_candidate_mask(
+            ar_df, customer_key, currency_key, alt_customer_keys
+        )
+        candidates_df = ar_df.loc[ar_mask].copy()
+        candidate_info = summarise_candidates(
+            ar_df=ar_df,
+            candidates_df=candidates_df,
+            invoice_numbers=invoice_numbers,
+            target_gross_cents=target_gross_cents,
+        )
+
         if payment_signature is not None and payment_signature in processed_payment_signatures:
             mark_duplicate_receipt(
                 bank_df=bank_df,
@@ -1184,37 +1293,55 @@ def main() -> None:
                 original_transaction_id=processed_payment_signatures[payment_signature],
                 invoice_numbers=invoice_numbers,
                 unmatched_bank_rows=unmatched_bank_rows,
+                candidate_info=candidate_info,
             )
             pending_review_count += 1
             continue
 
         if target_gross_cents <= 0 or target_net_cents < 0:
             reason = "Negative or zero receipt amount; route to reversal/refund/chargeback review."
-            append_unmatched(unmatched_bank_rows, bank_row, reason, scenario, extracted_invoices)
-            bank_df.at[bank_index, BANK_PROCESSING_NOTES_COL]     = reason
-            bank_df.at[bank_index, OUT_SUGGESTED_BANK_STATUS_COL] = "Pending Review"
+            route_to_review(
+                bank_df=bank_df,
+                bank_index=bank_index,
+                bank_row=bank_row,
+                reason=reason,
+                unmatched_rows=unmatched_bank_rows,
+                scenario=scenario,
+                extracted_invoices=extracted_invoices,
+                candidate_info=candidate_info,
+            )
             pending_review_count += 1
             continue
 
         if target_gross_cents - bank_fee_cents != target_net_cents:
             reason = "Gross Receipt Amount minus Bank Fees does not equal Net Amount."
-            append_unmatched(unmatched_bank_rows, bank_row, reason, scenario, extracted_invoices)
-            bank_df.at[bank_index, BANK_PROCESSING_NOTES_COL]     = reason
-            bank_df.at[bank_index, OUT_SUGGESTED_BANK_STATUS_COL] = "Pending Review"
+            route_to_review(
+                bank_df=bank_df,
+                bank_index=bank_index,
+                bank_row=bank_row,
+                reason=reason,
+                unmatched_rows=unmatched_bank_rows,
+                scenario=scenario,
+                extracted_invoices=extracted_invoices,
+                candidate_info=candidate_info,
+            )
             pending_review_count += 1
             continue
 
         if scenario in REVIEW_ONLY_SCENARIOS and scenario not in NAME_FALLBACK_SCENARIOS:
             reason = f"{scenario}: not eligible for full auto-reconciliation."
-            append_unmatched(unmatched_bank_rows, bank_row, reason, scenario, extracted_invoices)
-            bank_df.at[bank_index, BANK_PROCESSING_NOTES_COL]     = reason
-            bank_df.at[bank_index, OUT_SUGGESTED_BANK_STATUS_COL] = "Pending Review"
+            route_to_review(
+                bank_df=bank_df,
+                bank_index=bank_index,
+                bank_row=bank_row,
+                reason=reason,
+                unmatched_rows=unmatched_bank_rows,
+                scenario=scenario,
+                extracted_invoices=extracted_invoices,
+                candidate_info=candidate_info,
+            )
             pending_review_count += 1
             continue
-
-        # Controlled fallback keys for receipts that cannot be matched on ERP
-        # Customer ID alone (missing customer ID, or parent paying a child).
-        alt_customer_keys = build_name_fallback_keys(ar_df, bank_row)
 
         match_result = find_invoice_reference_match(
             ar_df=ar_df,
@@ -1223,24 +1350,25 @@ def main() -> None:
             target_gross_cents=target_gross_cents,
             target_net_cents=target_net_cents,
             bank_fee_cents=bank_fee_cents,
-            customer_key=bank_row["__customer_key"],
-            currency_key=bank_row["__currency_key"],
+            customer_key=customer_key,
+            currency_key=currency_key,
             alt_customer_keys=alt_customer_keys,
         )
 
         if match_result is None:
-            customer_key = bank_row["__customer_key"]
-            currency_key = bank_row["__currency_key"]
-            ar_mask      = build_candidate_mask(
-                ar_df, customer_key, currency_key, alt_customer_keys
-            )
-            candidates_df = ar_df.loc[ar_mask].copy()
-
             if candidates_df.empty:
                 reason = "No open AR candidates found for the same ERP Customer ID/customer name and currency."
-                append_unmatched(unmatched_bank_rows, bank_row, reason, scenario, extracted_invoices)
-                bank_df.at[bank_index, BANK_PROCESSING_NOTES_COL]     = reason
-                bank_df.at[bank_index, OUT_SUGGESTED_BANK_STATUS_COL] = "Exception"
+                route_to_review(
+                    bank_df=bank_df,
+                    bank_index=bank_index,
+                    bank_row=bank_row,
+                    reason=reason,
+                    unmatched_rows=unmatched_bank_rows,
+                    scenario=scenario,
+                    extracted_invoices=extracted_invoices,
+                    status="Exception",
+                    candidate_info=candidate_info,
+                )
                 continue
 
             match_result = find_amount_combination_match(candidates_df, target_gross_cents)
@@ -1251,17 +1379,17 @@ def main() -> None:
                 )
             if match_result is None:
                 reason = "No exact invoice reference or customer/currency amount combination equals the gross receipt amount."
-                append_unmatched(
-                    unmatched_bank_rows,
-                    bank_row,
-                    reason,
-                    scenario,
-                    extracted_invoices,
-                    candidate_count=len(candidates_df),
-                    candidate_total=cents_to_money(int(candidates_df["__ar_open_amount_cents"].sum())),
+                route_to_review(
+                    bank_df=bank_df,
+                    bank_index=bank_index,
+                    bank_row=bank_row,
+                    reason=reason,
+                    unmatched_rows=unmatched_bank_rows,
+                    scenario=scenario,
+                    extracted_invoices=extracted_invoices,
+                    status="Exception",
+                    candidate_info=candidate_info,
                 )
-                bank_df.at[bank_index, BANK_PROCESSING_NOTES_COL]     = reason
-                bank_df.at[bank_index, OUT_SUGGESTED_BANK_STATUS_COL] = "Exception"
                 continue
 
         close_invoice = (
@@ -1349,7 +1477,23 @@ def main() -> None:
     bank_output = bank_df.drop(columns=[c for c in helper_cols if c in bank_df.columns], errors="ignore")
 
     unmatched_df    = pd.DataFrame(unmatched_bank_rows)
-    data_quality_df = pd.DataFrame(data_quality_rows)
+    # Give the data quality sheet its headers even when nothing was flagged.
+    # Without this the sheet is written completely empty, so a reviewer cannot
+    # tell "no issues found" apart from "the check never ran".
+    data_quality_df = pd.DataFrame(
+        data_quality_rows,
+        columns=[
+            "Issue",
+            "AR Row Index",
+            "ERP Customer ID",
+            "Customer Name",
+            "Invoice Number",
+            "Open Amount",
+            "AR Status",
+            "Reconciliation Status",
+            "Recommendation",
+        ],
+    )
 
     summary_df = pd.DataFrame(
         [
@@ -1387,7 +1531,102 @@ def main() -> None:
         for sheet_name, frame in preserved.items():
             frame.to_excel(writer, index=False, sheet_name=sheet_name)
 
+    apply_workbook_formatting(OUTPUT_FILE)
+
     print("Done.")
+
+
+def apply_workbook_formatting(output_file: Path) -> None:
+    """
+    Make the workbook usable as a review sheet rather than a data dump.
+
+    Each reviewable sheet gets:
+
+      * a frozen header row, so the column names stay visible while the
+        reviewer scrolls through 200 rows,
+      * an auto-filter, so the reviewer can narrow the sheet down to the
+        handful of receipts they actually need to look at, and
+      * sensible column widths, so a receipt is readable without widening
+        every column by hand.
+    """
+    try:
+        from openpyxl import load_workbook
+        from openpyxl.styles import Font, PatternFill
+        from openpyxl.utils import get_column_letter
+    except ImportError:  # pragma: no cover - openpyxl is a hard dependency
+        return
+
+    # Sheets a reviewer works through, with the number of columns to freeze.
+    freeze_specs = {
+        "Reconciled Open AR": 3,
+        "Processed Bank Receipts": 2,
+        "Unmatched Bank Receipts": 2,
+        "Data Quality Checks": 2,
+        "AI Exception Review": 2,
+        "AI Exception Log": 2,
+    }
+
+    header_fill = PatternFill(start_color="FF1F3864", end_color="FF1F3864", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFFFF")
+
+    try:
+        workbook = load_workbook(output_file)
+    except Exception:
+        return
+
+    try:
+        for sheet_name, freeze_cols in freeze_specs.items():
+            if sheet_name not in workbook.sheetnames:
+                continue
+            sheet = workbook[sheet_name]
+            if sheet.max_row < 1:
+                continue
+
+            last_column = sheet.max_column
+            last_row = sheet.max_row
+
+            # Freeze the header row (and the identifying columns).
+            sheet.freeze_panes = sheet.cell(row=2, column=freeze_cols + 1)
+
+            # Auto-filter across the used range, but only when there is data
+            # to filter: Excel treats a filter on a single empty row as a
+            # broken filter.
+            if last_row > 1 and last_column > 0:
+                sheet.auto_filter.ref = (
+                    f"A1:{get_column_letter(last_column)}{last_row}"
+                )
+
+            # Style the header row.
+            for cell in sheet[1]:
+                if cell.value is not None:
+                    cell.fill = header_fill
+                    cell.font = header_font
+
+            # Size the columns.  Long free-text columns (memos, reasons,
+            # explanations) are capped so they do not push the numeric
+            # columns off the screen.
+            for column_index in range(1, last_column + 1):
+                letter = get_column_letter(column_index)
+                header = sheet.cell(row=1, column=column_index).value or ""
+                header = str(header).lower()
+                if any(token in header for token in ("memo", "reason", "note", "explanation", "treatment")):
+                    width = 45
+                elif "date" in header:
+                    width = 12
+                elif "amount" in header or "total" in header or "difference" in header:
+                    width = 16
+                elif "invoice" in header:
+                    width = 18
+                else:
+                    width = 22
+
+                sheet.column_dimensions[letter].width = width
+
+        workbook.save(output_file)
+    except Exception:
+        # Formatting is a convenience.  A workbook that cannot be prettified
+        # is still a correct workbook, so never fail the run over it.
+        pass
 
 
 def read_preserved_sheets(output_file: Path) -> dict[str, pd.DataFrame]:
@@ -1413,7 +1652,10 @@ def read_preserved_sheets(output_file: Path) -> dict[str, pd.DataFrame]:
             frame = pd.read_excel(output_file, sheet_name=sheet_name)
         except Exception:
             continue
-        if not frame.empty:
+        # Keep a sheet that has headers even if it has no rows yet, so an
+        # empty audit log still shows its columns.  A sheet with neither rows
+        # nor columns carries no information and is dropped.
+        if not frame.empty or len(frame.columns) > 0:
             preserved[sheet_name] = frame
 
     return preserved

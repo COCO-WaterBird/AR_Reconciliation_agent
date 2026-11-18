@@ -1,0 +1,32 @@
+{
+  "row_counts": {
+    "Reconciled Open AR": 191,
+    "Processed Bank Receipts": 200,
+    "Unmatched Bank Receipts": 64
+  },
+  "ar_applied_total": 709365.05,
+  "bank_applied_total": 709365.05,
+  "ar_status": {
+    "Reconciled": 125,
+    "Unmatched": 38,
+    "Pending Review": 28
+  },
+  "bank_status": {
+    "Reconciled": 103,
+    "Pending Review": 83,
+    "Exception": 14
+  },
+  "match_methods": {
+    "Memo Invoice Match": 124,
+    "": 38,
+    "Memo Invoice Match - Bank Fee": 5,
+    "Memo Invoice Match - Rounding": 5,
+    "Memo Invoice Match - Short Payment": 5,
+    "Memo Invoice Match - Overpayment": 5,
+    "Memo Invoice Match - Partial Payment": 5,
+    "Amount Combination - Overpayment": 1,
+    "Memo Invoice Match - Small Residual Write-Off": 1,
+    "Customer Currency Amount Combination": 1,
+    "Memo Invoice Match - Sales Tax Adjustment": 1
+  }
+}

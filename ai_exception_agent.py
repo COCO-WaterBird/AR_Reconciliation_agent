@@ -64,6 +64,14 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 
+from core import (
+    cents_to_money,
+    format_money,
+    money_to_cents,
+    normalize_key,
+    normalize_text,
+)
+
 BASE_DIR = Path(__file__).resolve().parent
 
 RESULT_FILE = BASE_DIR / "Open_AR_Detail_Reconciled_Result.xlsx"
@@ -246,51 +254,11 @@ CENTS = Decimal("0.01")
 # Small helpers
 # ---------------------------------------------------------------------------
 
-def normalize_text(value: object) -> str:
-    """Collapse whitespace and strip; never returns None."""
-    if value is None:
-        return ""
-    if isinstance(value, float) and pd.isna(value):
-        return ""
-    try:
-        if pd.isna(value):
-            return ""
-    except (TypeError, ValueError):
-        pass
-    return re.sub(r"\s+", " ", str(value)).strip()
+# These live in core.py so that the engine and the AI exception agent share
+# one definition of "what a cell means".  See core.py for why the parse
+# behaviour has to be identical on both sides.
 
 
-def normalize_key(value: object) -> str:
-    """Lower-cased, punctuation-free key used for fuzzy text comparison."""
-    return re.sub(r"[^a-z0-9]+", "", normalize_text(value).lower())
-
-
-def money_to_cents(value: object) -> int:
-    """Convert a monetary value to integer cents using half-up rounding."""
-    if value is None:
-        return 0
-    if isinstance(value, (int,)):
-        return int(Decimal(value) * 100)
-    if isinstance(value, float):
-        if pd.isna(value):
-            return 0
-        value = str(value)
-    text = str(value).strip().replace(",", "").replace("$", "")
-    if not text:
-        return 0
-    try:
-        return int((Decimal(text) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-    except Exception:
-        return 0
-
-
-def cents_to_money(cents: int) -> float:
-    """Convert integer cents back to a float amount."""
-    return float((Decimal(int(cents)) / 100).quantize(CENTS, rounding=ROUND_HALF_UP))
-
-
-def format_money(cents: int) -> str:
-    return f"{cents_to_money(cents):,.2f}"
 
 
 def _as_text(value: object) -> str:
@@ -728,6 +696,9 @@ class LLMBackend:
         timeout: float = 300.0,
         max_retries: int = 3,
         disable_thinking: bool = False,
+        num_ctx: int | None = None,
+        num_thread: int | None = None,
+        keep_alive: str | int | None = None,
     ) -> None:
         try:
             from openai import OpenAI
@@ -743,6 +714,9 @@ class LLMBackend:
         self._client = OpenAI(**kwargs)
         self.model = model
         self._supports_json_schema: bool | None = None
+        # Running token totals, so a paid run can report what it spent.
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
         # The probe is a one-off request that costs a full model round trip, so
         # it must run exactly once even when the receipts are analysed in
         # parallel.  Without the lock, every worker thread would fire its own
@@ -753,6 +727,27 @@ class LLMBackend:
         # constraint for the token budget.  Turning it off is worthwhile for a
         # structured extraction task like this one.
         self._extra_body: dict[str, Any] = {"think": False} if disable_thinking else {}
+
+        # --- Resource controls for a local model -------------------------
+        #
+        # A local 7B model on a laptop is the resource-hungry case: it keeps
+        # its weights and KV cache resident between requests and it will
+        # happily use every CPU core.  On a 16 GB machine that is enough to
+        # make the desktop unusable, so the caller can cap the context
+        # length, the number of inference threads and the time the model stays
+        # loaded after the last request.
+        #
+        # These are Ollama/LM Studio options.  A hosted OpenAI endpoint
+        # ignores unknown keys, so passing them is harmless there.
+        options: dict[str, Any] = {}
+        if num_ctx:
+            options["num_ctx"] = num_ctx
+        if num_thread:
+            options["num_thread"] = num_thread
+        if options:
+            self._extra_body["options"] = options
+        if keep_alive is not None:
+            self._extra_body["keep_alive"] = keep_alive
 
     # -- structured output negotiation -------------------------------------
 
@@ -834,6 +829,14 @@ class LLMBackend:
             kwargs["extra_body"] = self._extra_body
         response = self._client.chat.completions.create(**kwargs)
         content = response.choices[0].message.content or "{}"
+
+        # Keep a running total of the tokens spent.  On a paid API this is the
+        # number that turns into the bill, so it is worth showing.
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            self.prompt_tokens += getattr(usage, "prompt_tokens", 0) or 0
+            self.completion_tokens += getattr(usage, "completion_tokens", 0) or 0
+
         return parse_json_object(content)
 
 
@@ -1582,7 +1585,17 @@ def analyse_exceptions(
     concurrency: int = 1,
     limit: int = 0,
     disable_thinking: bool = False,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, list[dict[str, Any]]]:
+    num_ctx: int | None = None,
+    num_thread: int | None = None,
+    keep_alive: str | int | None = None,
+) -> tuple[
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+    "LLMBackend | None",
+]:
     """
     Analyse every unmatched receipt and return the review, log and context
     frames together with the updated AR and processed-receipt frames.
@@ -1613,6 +1626,9 @@ def analyse_exceptions(
             model=model,
             base_url=base_url,
             disable_thinking=disable_thinking,
+            num_ctx=num_ctx,
+            num_thread=num_thread,
+            keep_alive=keep_alive,
         )
         engine_label = f"LLM ({model})"
     else:
@@ -1722,7 +1738,9 @@ def analyse_exceptions(
             log_rows.extend(local_log)
 
     review_df = pd.DataFrame(review_rows)
-    log_df = pd.DataFrame(log_rows)
+    # Give the log its headers even when nothing was logged, so the sheet keeps
+    # a stable shape instead of turning into a blank tab.
+    log_df = pd.DataFrame(log_rows, columns=["Bank Transaction ID", "Outcome", "Detail"])
 
     # Preserve any approval a reviewer already entered.  Re-running the
     # analysis must not silently discard a human decision, and the result
@@ -1749,7 +1767,7 @@ def analyse_exceptions(
                 review_df.at[index, REVIEW_APPROVAL_COL] = previous["approval"]
                 review_df.at[index, REVIEW_REVIEWER_NOTES_COL] = previous.get("notes", "")
 
-    return ar_df, result_df, review_df, log_df, unmatched_df
+    return ar_df, result_df, review_df, log_df, unmatched_df, backend
 
 
 def read_existing_approvals(result_path: Path) -> dict[str, dict[str, Any]]:
@@ -1844,6 +1862,16 @@ def write_review_sheet(
         review_df.to_excel(writer, index=False, sheet_name=REVIEW_SHEET)
         log_df.to_excel(writer, index=False, sheet_name=REVIEW_LOG_SHEET)
 
+    # The reviewer works through this sheet, so it needs the same header
+    # freeze, auto-filter and column widths as the engine's own sheets.
+    # The formatting helper lives in the engine module; it is imported here
+    # rather than duplicated, so both writers stay in step.
+    try:
+        from auto_reconcile_na import apply_workbook_formatting
+    except ImportError:  # pragma: no cover - only when imported standalone
+        return
+    apply_workbook_formatting(result_path)
+
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -1903,6 +1931,27 @@ def build_parser() -> argparse.ArgumentParser:
         "where each receipt takes 20-50 seconds (default: %(default)s)",
     )
     parser.add_argument(
+        "--num-ctx",
+        type=int,
+        default=None,
+        help="Context window for a local model, in tokens. A smaller window keeps the "
+        "KV cache small and the machine responsive (default: the server's own setting)",
+    )
+    parser.add_argument(
+        "--num-thread",
+        type=int,
+        default=None,
+        help="CPU threads a local model may use. Capping this keeps the desktop "
+        "responsive while the model runs (default: the server's own setting)",
+    )
+    parser.add_argument(
+        "--keep-alive",
+        default=None,
+        help="How long a local model stays loaded after the last request, e.g. '5m' "
+        "or '0' to unload it immediately and give the memory back (default: the "
+        "server's own setting)",
+    )
+    parser.add_argument(
         "--apply-approved",
         action="store_true",
         help="Apply the recommendations approved in the review sheet (Approval = APPROVE) "
@@ -1918,7 +1967,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print("AI Exception Resolution Agent")
     print("=" * 72)
 
-    ar_df, result_df, review_df, log_df, _ = analyse_exceptions(
+    ar_df, result_df, review_df, log_df, unmatched_df, backend = analyse_exceptions(
         result_path=args.result,
         backend_name=args.backend,
         model=args.model,
@@ -1927,6 +1976,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         concurrency=max(1, args.concurrency),
         limit=max(0, args.limit),
         disable_thinking=args.disable_thinking,
+        num_ctx=args.num_ctx,
+        num_thread=args.num_thread,
+        keep_alive=args.keep_alive,
     )
 
     if review_df.empty:
@@ -1949,6 +2001,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     print("\nException types:")
     for exception_type, count in sorted(by_exception.items(), key=lambda kv: (-kv[1], kv[0])):
         print(f"  {exception_type:<28} {count}")
+
+    # On a paid endpoint the token totals are what turns into the bill, so
+    # they are worth showing.  The rules backend never calls the model.
+    if backend is not None:
+        prompt_tokens = getattr(backend, "prompt_tokens", 0)
+        completion_tokens = getattr(backend, "completion_tokens", 0)
+        if prompt_tokens or completion_tokens:
+            total_tokens = prompt_tokens + completion_tokens
+            print(
+                f"\nTokens used: {prompt_tokens} prompt + {completion_tokens} completion "
+                f"= {total_tokens} total"
+            )
 
     write_review_sheet(args.result, review_df, log_df)
     write_approval_ledger(review_df, approval_ledger_path(args.result))
