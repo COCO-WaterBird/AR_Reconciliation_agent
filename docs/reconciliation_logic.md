@@ -6,12 +6,10 @@ The automation is designed for local Excel-based Accounts Receivable cash applic
 
 ## 1. Input Files
 
-The automation expects the following files in the same folder as the Python script:
-
+The automation expects the following files in `data/input/`:
 ```text
-Bank_Cash_Receipts.xlsx
-Open_AR_Detail.xlsx
-auto_reconcile_na.py
+data/input/Bank_Cash_Receipts.xlsx
+data/input/Open_AR_Detail.xlsx
 ```
 
 Expected input sheets:
@@ -23,10 +21,10 @@ Expected input sheets:
 
 ## 2. Output File
 
-The automation creates the following output workbook:
+The automation creates the following output workbook in `data/output/`:
 
 ```text
-Open_AR_Detail_Reconciled_Result.xlsx
+data/output/Open_AR_Detail_Reconciled_Result.xlsx
 ```
 
 Expected output sheets:
@@ -39,7 +37,7 @@ Expected output sheets:
 | Data Quality Checks | AR data quality issues identified during processing. |
 | Summary | Run-level metrics and output file name. |
 
-`ai_exception_agent.py` adds two more sheets to the same workbook:
+`src/ar_reconciliation/agent/` adds two more sheets to the same workbook:
 
 | Sheet Name | Purpose |
 |---|---|
@@ -398,7 +396,7 @@ The `Summary` sheet should include the following run metrics:
 ## 13. Exception Analysis and Human Approval
 
 The deterministic engine leaves every receipt it cannot prove unmatched. Those
-receipts are then analysed by `ai_exception_agent.py`, which classifies the
+receipts are then analysed by `src/ar_reconciliation/agent/`, which classifies the
 exception, explains the root cause and recommends a next action.
 
 The agent is assistive, not authoritative. Its recommendations are written to the

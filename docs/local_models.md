@@ -40,7 +40,7 @@ ollama pull llama3.1:8b       # ~4.9 GB
 ### Run the agent
 
 ```bash
-python ai_exception_agent.py \
+python scripts/run_agent.py \
     --backend llm \
     --base-url http://localhost:11434/v1 \
     --model qwen2.5:7b \
@@ -56,18 +56,18 @@ You can shorten the command with environment variables:
 export OPENAI_BASE_URL=http://localhost:11434/v1
 export OPENAI_API_KEY=ollama
 export AR_AGENT_MODEL=qwen2.5:7b
-python ai_exception_agent.py --backend llm
+python scripts/run_agent.py --backend llm
 ```
 
 ### Or use the convenience wrapper
 
-`run_local_model.py` checks the server, lists the installed models and picks the
+`scripts/run_local_model.py` checks the server, lists the installed models and picks the
 right defaults for a local model:
 
 ```bash
-python run_local_model.py --list                        # show installed models
-python run_local_model.py --model qwen2.5:7b --limit 10 # smoke test on 10 receipts
-python run_local_model.py --model qwen2.5:7b --concurrency 4
+python scripts/run_local_model.py --list                        # show installed models
+python scripts/run_local_model.py --model qwen2.5:7b --limit 10 # smoke test on 10 receipts
+python scripts/run_local_model.py --model qwen2.5:7b --concurrency 4
 ```
 
 The smoke test works on a temporary copy of the workbook, so it never touches the
@@ -160,7 +160,7 @@ reasoning but is far slower on this task, and it competes with the grammar
 constraint for the token budget. Turn it off:
 
 ```bash
-python ai_exception_agent.py --backend llm \
+python scripts/run_agent.py --backend llm \
     --base-url http://localhost:11434/v1 --model qwen3:8b --no-think
 ```
 
@@ -204,7 +204,7 @@ audit trail.
 Start the local server, enable the OpenAI-compatible endpoint, then:
 
 ```bash
-python ai_exception_agent.py --backend llm \
+python scripts/run_agent.py --backend llm \
     --base-url http://localhost:1234/v1 --model <model-id> --api-key lm-studio
 ```
 
@@ -213,7 +213,7 @@ python ai_exception_agent.py --backend llm \
 ```bash
 ./llama-server -m qwen2.5-7b-instruct-q4_k_m.gguf --port 8080
 
-python ai_exception_agent.py --backend llm \
+python scripts/run_agent.py --backend llm \
     --base-url http://localhost:8080/v1 --model qwen2.5-7b-instruct-q4_k_m --api-key local
 ```
 
@@ -225,7 +225,7 @@ works here too.
 ```bash
 vllm serve Qwen/Qwen2.5-7B-Instruct --guided-json-backend outlines
 
-python ai_exception_agent.py --backend llm \
+python scripts/run_agent.py --backend llm \
     --base-url http://localhost:8000/v1 --model Qwen/Qwen2.5-7B-Instruct --api-key empty
 ```
 
@@ -247,7 +247,7 @@ Each needs an API key, so the command is the same with a different
 `--base-url`:
 
 ```bash
-python ai_exception_agent.py --backend llm \
+python scripts/run_agent.py --backend llm \
     --base-url https://generativelanguage.googleapis.com/v1beta/openai/ \
     --model gemini-2.0-flash --api-key "$GOOGLE_API_KEY"
 ```
@@ -267,8 +267,8 @@ The `rules` backend is not a fallback for when you lack a GPU. It is the
 A useful working pattern is to run both and compare:
 
 ```bash
-python ai_exception_agent.py --backend rules
-python ai_exception_agent.py --backend llm --base-url http://localhost:11434/v1 --model qwen2.5:7b --api-key ollama
+python scripts/run_agent.py --backend rules
+python scripts/run_agent.py --backend llm --base-url http://localhost:11434/v1 --model qwen2.5:7b --api-key ollama
 ```
 
 Any row where the two disagree is a receipt worth a human look — which is

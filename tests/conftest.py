@@ -14,13 +14,11 @@ import pandas as pd
 import pytest
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-if str(BASE_DIR) not in sys.path:
-    sys.path.insert(0, str(BASE_DIR))
+_SRC = BASE_DIR / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
-
-BANK_FILE = BASE_DIR / "Bank_Cash_Receipts.xlsx"
-AR_FILE = BASE_DIR / "Open_AR_Detail.xlsx"
-RESULT_FILE = BASE_DIR / "Open_AR_Detail_Reconciled_Result.xlsx"
+from ar_reconciliation.config import AR_FILE, BANK_FILE, RESULT_FILE  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -44,15 +42,16 @@ def result_path(tmp_path_factory) -> Path:
     output goes to a temporary path so the tests never touch the workbook in
     the repository.
     """
-    import auto_reconcile_na as engine
+    from ar_reconciliation.services import run_reconciliation
 
     out_dir = tmp_path_factory.mktemp("reconciliation")
     out_file = out_dir / "result.xlsx"
 
-    engine.main(
+    run_reconciliation(
         bank_path=BANK_FILE,
         ar_path=AR_FILE,
         output_path=out_file,
+        verbose=False,
     )
     return out_file
 
@@ -90,7 +89,7 @@ def analysis(result_path, tmp_path_factory):
     """
     import shutil
 
-    import ai_exception_agent as agent
+    from ar_reconciliation.agent import exception_agent as agent
 
     out_dir = tmp_path_factory.mktemp("agent")
     out_file = out_dir / "result.xlsx"

@@ -12,8 +12,8 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-import ai_exception_agent as agent
-from core import money_to_cents
+from ar_reconciliation.agent import exception_agent as agent
+from ar_reconciliation.core.primitives import money_to_cents
 
 
 def make_context(

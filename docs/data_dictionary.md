@@ -2,12 +2,12 @@
 
 This document defines the fields used by the sample input and output files for the **North America AR Cash Application Automation** project.
 
-The project uses two primary input workbooks:
+The project uses two primary input workbooks, in `data/input/`:
 
 1. `Bank_Cash_Receipts.xlsx`
 2. `Open_AR_Detail.xlsx`
 
-The automation produces one output workbook:
+The automation produces one output workbook, in `data/output/`:
 
 1. `Open_AR_Detail_Reconciled_Result.xlsx`
 
@@ -109,14 +109,14 @@ The automation creates a new workbook instead of overwriting the source files.
 | Unmatched Bank Receipts | Bank receipts that could not be auto-matched or were routed to exception review. |
 | Data Quality Checks | Data quality issues found in the AR data, such as closed or reconciled invoices with non-zero open amount. |
 | Summary | Key run metrics such as matched receipts, matched invoices, pending review receipts, exceptions, and data quality issue count. |
-| AI Exception Review | Written by `ai_exception_agent.py`. One row per unmatched receipt with the agent's exception type, root cause, recommended action, confidence, proposed invoices and amounts, accounting treatment, proposed GL posting, explanation, and the reviewer's `Approval` decision. |
-| AI Exception Log | Written by `ai_exception_agent.py`. One row per validation repair, model error or apply outcome, so every change the agent made to a recommendation is auditable. |
+| AI Exception Review | Written by `src/ar_reconciliation/agent/`. One row per unmatched receipt with the agent's exception type, root cause, recommended action, confidence, proposed invoices and amounts, accounting treatment, proposed GL posting, explanation, and the reviewer's `Approval` decision. |
+| AI Exception Log | Written by `src/ar_reconciliation/agent/`. One row per validation repair, model error or apply outcome, so every change the agent made to a recommendation is auditable. |
 
 ### File: `AI_Exception_Approvals.xlsx`
 
 | Sheet Name | Description |
 |---|---|
-| AI Exception Review | The durable copy of the review sheet, including the reviewer's approval decisions. It survives a re-run of `auto_reconcile_na.py`, which regenerates the result workbook. See [AI Exception Agent](ai_exception_agent.md). |
+| AI Exception Review | The durable copy of the review sheet, including the reviewer's approval decisions. It survives a re-run of `src/ar_reconciliation/services/reconciliation.py`, which regenerates the result workbook. See [AI Exception Agent](ai_exception_agent.md). |
 
 ## 4. Key Business Definitions
 

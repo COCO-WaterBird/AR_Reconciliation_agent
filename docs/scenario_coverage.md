@@ -113,7 +113,7 @@ statements above are checked on every push rather than only by inspection.
 To check that a run reproduces the numbers below, use the stored baseline:
 
 ```bash
-python check_regression.py baseline.json
+python scripts/check_regression.py data/baseline.json
 ```
 
 ## Verified Baseline
@@ -155,7 +155,7 @@ Notes on specific scenarios:
 
 ## AI Exception Analysis Baseline
 
-`ai_exception_agent.py` analyses the 64 unmatched receipts with its deterministic
+`src/ar_reconciliation/agent/` analyses the 64 unmatched receipts with its deterministic
 `rules` backend:
 
 | Recommended action | Receipts |

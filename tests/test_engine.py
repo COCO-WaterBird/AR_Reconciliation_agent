@@ -11,8 +11,8 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-import auto_reconcile_na as engine
-from core import money_to_cents
+from ar_reconciliation.core.primitives import money_to_cents
+from ar_reconciliation.services import reconciliation as engine
 
 
 # ---------------------------------------------------------------------------

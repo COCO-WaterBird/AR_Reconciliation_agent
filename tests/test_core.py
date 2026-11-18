@@ -1,5 +1,5 @@
 """
-Tests for the shared cell primitives in core.py.
+Tests for the shared cell primitives in core/primitives.py.
 
 These are the conversions every other component relies on, so they get the
 most direct coverage: a wrong answer here is a wrong control total.
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from core import (
+from ar_reconciliation.core.primitives import (
     MoneyParseError,
     cents_to_money,
     format_money,

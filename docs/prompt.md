@@ -5,9 +5,9 @@ Please help me build and validate a North America-style local AR cash applicatio
 
 Current folder contains:
 
-1. Bank_Cash_Receipts.xlsx
-2. Open_AR_Detail.xlsx
-3. auto_reconcile_na.py
+1. data/input/Bank_Cash_Receipts.xlsx
+2. data/input/Open_AR_Detail.xlsx
+3. src/ar_reconciliation/services/reconciliation.py
 
 Business context:
 
@@ -134,10 +134,11 @@ Put these issues into the Data Quality Checks sheet with a recommendation.
 Execution instructions:
 
 1. First inspect the Excel headers and confirm whether the code column names match the actual files.
-2. If any column name is missing or different, update the configuration section in auto_reconcile_na.py.
+2. If any column name is missing or different, update the column names in
+   `src/ar_reconciliation/core/schema.py`.
 3. Run:
 
-python auto_reconcile_na.py
+python scripts/run_reconciliation.py
 
 4. If there are errors, fix the script and run again.
 5. After successful execution, summarize:

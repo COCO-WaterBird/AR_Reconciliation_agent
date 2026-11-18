@@ -30,20 +30,25 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install pytest
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+          python -m pip install -e .
 
       - name: Run the test suite
         run: python -m pytest tests/ -v
 
       - name: Run the offline LLM backend check
-        run: python test_llm_backend.py
+        run: python -m pytest tests/test_llm_backend.py -v
 
       - name: Run the reconciliation end to end
         run: |
-          python auto_reconcile_na.py
-          python ai_exception_agent.py
-          python ai_exception_agent.py --apply-approved
+          python scripts/run_reconciliation.py
+          python scripts/run_agent.py
+          python scripts/run_agent.py --apply-approved
 
       - name: Check the run against the stored baseline
-        run: python check_regression.py baseline.json
+        run: python scripts/check_regression.py data/baseline.json
+
+      - name: Verify the source workbooks were not modified
+        run: |
+          git diff --exit-code -- data/input/
+          echo "Source workbooks are unchanged."
