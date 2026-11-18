@@ -32,7 +32,6 @@ Ollama exposes an OpenAI-compatible endpoint, so the agent needs no code change.
 ```bash
 # Install from https://ollama.com/download
 ollama pull qwen2.5:7b        # ~4.7 GB, runs on 8 GB RAM
-ollama pull qwen3:8b          # newer, ~5.2 GB
 ollama pull gemma3:12b        # ~8 GB, needs 16 GB RAM
 ollama pull llama3.1:8b       # ~4.9 GB
 ```
@@ -142,7 +141,6 @@ open-ended reasoning. That favours models that are good at following a schema.
 | Model | Size | RAM needed | Notes |
 |---|---|---|---|
 | `qwen2.5:7b` | 4.7 GB | 8 GB | Strong JSON adherence, good at Chinese and English finance memos |
-| `qwen3:8b` | 5.2 GB | 8 GB | Better reasoning, but its "thinking" mode is much slower — pass `--no-think` |
 | `llama3.1:8b` | 4.9 GB | 8 GB | Solid general purpose |
 | `gemma3:12b` | 8 GB | 16 GB | Best quality that still fits a 16 GB machine |
 | `qwen2.5:14b` | 9 GB | 16 GB | Noticeably better, tight on a 16 GB Mac |
@@ -152,6 +150,23 @@ open-ended reasoning. That favours models that are good at following a schema.
 **On an M1 Pro with 16 GB**, `qwen2.5:7b` or `gemma3:12b` are the practical
 choices. Expect roughly 20–50 seconds per receipt, because every receipt is a
 separate call.
+
+### The context window matters
+
+The exception prompt carries the candidate invoice list, the AR balances and the
+accounting treatment, so it does not fit in the 2-4k window Ollama defaults to.
+A window that is too small makes the model stall while the grammar constraint
+and the prompt compete for the same token budget.
+
+Set it explicitly:
+
+```bash
+python scripts/run_agent.py --backend llm \
+    --base-url http://localhost:11434/v1 --model qwen2.5:7b \
+    --api-key ollama --num-ctx 8192
+```
+
+`scripts/run_local_model.py` already passes `--num-ctx 8192` for you.
 
 ### The qwen3 thinking mode
 
@@ -165,7 +180,8 @@ python scripts/run_agent.py --backend llm \
 ```
 
 Measured on an M1 Pro: `qwen3:8b` with thinking took 150 s and 98 s for two
-receipts; `qwen2.5:7b` took 38 s and 19 s for the same work.
+receipts; `qwen2.5:7b` took 38 s and 19 s for the same work. That is why
+`qwen2.5:7b` is the model this project uses locally.
 
 ### Speed
 

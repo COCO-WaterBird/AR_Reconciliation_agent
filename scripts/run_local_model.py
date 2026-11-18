@@ -31,7 +31,6 @@ the machine - this wrapper caps the resources it uses:
 Usage
 -----
     python scripts/run_local_model.py                                    # light profile
-    python scripts/run_local_model.py --model qwen2.5:3b                 # smallest model
     python scripts/run_local_model.py --model qwen2.5:7b --limit 10      # smoke test
     python scripts/run_local_model.py --list                             # show installed models
 
@@ -57,12 +56,15 @@ if _SRC.is_dir() and str(_SRC) not in sys.path:
 from ar_reconciliation.agent import exception_agent as A  # noqa: E402
 
 DEFAULT_BASE_URL = "http://localhost:11434/v1"
-DEFAULT_MODEL = "qwen2.5:3b"
+DEFAULT_MODEL = "qwen2.5:7b"
 
 # Light defaults.  A local model on a laptop otherwise keeps 4-5 GB resident
 # and saturates every core, which makes the machine unusable for anything else.
 DEFAULT_CONCURRENCY = 1
-DEFAULT_NUM_CTX = 2048
+# The exception prompt carries the candidate invoice list, so it does not fit
+# in the 2-4k window Ollama defaults to.  8k is the smallest window that
+# holds it with room for the model's own reply.
+DEFAULT_NUM_CTX = 8192
 DEFAULT_NUM_THREAD = 4
 DEFAULT_KEEP_ALIVE = "0"
 

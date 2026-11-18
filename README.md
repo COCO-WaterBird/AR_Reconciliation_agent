@@ -206,6 +206,8 @@ and every exception taxonomy is stated once, with the reason it has that value.
 │   ├── run_agent.py                #   Run the AI exception agent
 │   ├── run_openai.py               #   Run the agent against the OpenAI API
 │   ├── run_local_model.py          #   Run the agent against a local model
+│   ├── show_result.py              #   Inspect the result from the terminal
+│   ├── make_images.py              #   Regenerate the README images
 │   └── check_regression.py         #   Compare a run against the baseline
 ├── data/
 │   ├── input/                      # Source workbooks (read-only)
@@ -275,6 +277,17 @@ Pending review receipts            : 67
 Unmatched / exception bank receipts: 64
 Data quality issues                : 0
 Reconciled control difference      : 0.00
+```
+
+To look at the result without opening Excel:
+
+```bash
+python scripts/show_result.py             # the summary
+python scripts/show_result.py sheets      # what is in the workbook
+python scripts/show_result.py matches     # how the receipts were matched
+python scripts/show_result.py unmatched   # the receipts that need a human
+python scripts/show_result.py review      # what the agent recommended
+python scripts/show_result.py ar          # the reconciled AR rows
 ```
 
 ### 3. Run the AI exception agent
