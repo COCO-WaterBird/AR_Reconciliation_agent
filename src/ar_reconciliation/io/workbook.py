@@ -15,6 +15,8 @@ path.
 
 from __future__ import annotations
 
+import re
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -99,6 +101,132 @@ def read_preserved_sheets(output_file: Path) -> dict[str, pd.DataFrame]:
     return preserved
 
 
+#: The corporate palette used by the exported report.
+#:
+#: Navy is the header fill, the four status colours are the tints a finance
+#: manager expects to see on a reconciliation review sheet, and the zebra
+#: stripe is what makes a 200-row sheet readable without banding every row
+#: in a heavy colour.
+NAVY = "FF17365D"
+WHITE = "FFFFFFFF"
+ZEBRA = "FFF2F5F9"
+BORDER = "FFD6DCE4"
+
+STATUS_FILLS = {
+    # Confirmed: the deterministic engine settled it.
+    "green": "FFE2EFDA",
+    # Unmatched: nothing was reconciled.
+    "red": "FFFCE4E4",
+    # AI suggestion: a proposal waiting for a human.
+    "yellow": "FFFFF2CC",
+    # Exception: needs escalation.
+    "orange": "FFFCE4D6",
+}
+
+#: The font stack.  Aptos is the current Excel default; Calibri is the
+#: fallback for older Excel and for LibreOffice.  Excel for Mac resolves
+#: both, so the report renders the same on either platform.
+FONT_NAME = "Aptos"
+FONT_FALLBACK = "Calibri"
+
+#: Currency, with negatives in parentheses.  This is the format US finance
+#: reporting expects on a reconciliation.
+CURRENCY_FORMAT = '$#,##0.00;($#,##0.00)'
+NUMBER_FORMAT = '#,##0.00;(#,##0.00)'
+PERCENT_FORMAT = '0.0%'
+DATE_FORMAT = 'MM/DD/YYYY'
+
+#: A cell holding an ISO date as text.  Used to recognise a date column
+#: whose header does not say "date" - the Summary sheet's "Value" column
+#: holds amounts, and must not be turned into a date.
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2})?")
+
+#: Columns whose values are money.  Matched case-insensitively against the
+#: header, so "Gross Receipt Amount", "bank fees" and "AR applied amount
+#: total" all qualify.
+_CURRENCY_TOKENS = ("amount", "fee", "total", "difference", "balance", "price")
+#: Columns that hold a date.  Matched on word boundaries: "Candidate
+#: Invoice Count" contains the letters "date" inside "Candidate", and a
+#: substring match would turn a count into a date.
+_DATE_TOKENS = ("date", "posted", "due")
+#: Columns that hold a share or rate.
+_PERCENT_TOKENS = ("percent", "percentage", "rate", "ratio")
+#: Free-text columns that should wrap rather than run off the page.
+_TEXT_TOKENS = ("memo", "reason", "note", "explanation", "treatment", "detail")
+
+
+def _has_token(name: str, tokens: tuple[str, ...]) -> bool:
+    """
+    Match a header token on word boundaries.
+
+    Splitting on non-alphanumeric characters means "Candidate Invoice Count"
+    does not match "date" (it only appears inside "Candidate"), while
+    "Posted Date" and "Due Date" still do.
+
+    A token also matches when it starts a word, so "fee" matches "Bank Fees"
+    and "amount" matches "Amount Total".
+    """
+    words = set(re.split(r"[^a-z0-9]+", name.lower()))
+    for word in words:
+        for token in tokens:
+            if word == token or word.startswith(token):
+                return True
+    return False
+
+
+def _is_datetime_value(value: object) -> bool:
+    """True when a cell holds a real date rather than a number."""
+    if isinstance(value, datetime):
+        return True
+    if isinstance(value, date):
+        return True
+    return isinstance(value, str) and bool(_ISO_DATE.match(value.strip()))
+
+
+def _column_kind(header: str) -> str:
+    """
+    Classify a column by its header so the right number format is applied.
+
+    Dates are checked before currency because "Matched Payment Date" contains
+    neither of the currency tokens, but "Open Amount" has to win over the
+    generic fallback.
+    """
+    name = str(header).strip().lower()
+    if _has_token(name, _DATE_TOKENS):
+        return "date"
+    if _has_token(name, _PERCENT_TOKENS):
+        return "percent"
+    if _has_token(name, _CURRENCY_TOKENS):
+        return "currency"
+    return "text"
+
+
+def _is_text_column(header: str) -> bool:
+    return _has_token(str(header).strip().lower(), _TEXT_TOKENS)
+
+
+def _status_fill(value: object) -> str | None:
+    """
+    Map a status cell to its tint.
+
+    Only exact matches on the values the project actually produces are
+    coloured.  A cell with an unexpected value keeps the zebra stripe, so a
+    new status never ends up with a misleading colour.
+    """
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    if text in {"reconciled", "applied", "matched"}:
+        return STATUS_FILLS["green"]
+    if text in {"unmatched", "unapplied"}:
+        return STATUS_FILLS["red"]
+    if text in {"pending review", "recommend match", "suggested"}:
+        return STATUS_FILLS["yellow"]
+    if text in {"exception", "hold / escalate", "manual review", "return to customer"}:
+        return STATUS_FILLS["orange"]
+    return None
+
+
 def apply_workbook_formatting(output_file: Path) -> None:
     """
     Make the workbook usable as a review sheet rather than a data dump.
@@ -108,13 +236,20 @@ def apply_workbook_formatting(output_file: Path) -> None:
       * a frozen header row, so the column names stay visible while the
         reviewer scrolls through 200 rows,
       * an auto-filter, so the reviewer can narrow the sheet down to the
-        handful of receipts they actually need to look at, and
+        handful of receipts they actually need to look at,
       * sensible column widths, so a receipt is readable without widening
-        every column by hand.
+        every column by hand, and
+      * the corporate report styling: a navy header band, zebra-striped
+        rows, money/dates in their reporting formats, and a status tint on
+        the columns a reviewer sorts by.
+
+    Only the presentation changes.  No cell value, sheet name, column name,
+    column order or row count is touched, so the workbook stays readable by
+    pandas and by the approval workflow.
     """
     try:
         from openpyxl import load_workbook
-        from openpyxl.styles import Font, PatternFill
+        from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
         from openpyxl.utils import get_column_letter
     except ImportError:  # pragma: no cover - openpyxl is a hard dependency
         return
@@ -125,14 +260,17 @@ def apply_workbook_formatting(output_file: Path) -> None:
         "Processed Bank Receipts": 2,
         "Unmatched Bank Receipts": 2,
         "Data Quality Checks": 2,
+        "Summary": 1,
         "AI Exception Review": 2,
         "AI Exception Log": 2,
     }
 
-    header_fill = PatternFill(
-        start_color="FF1F3864", end_color="FF1F3864", fill_type="solid"
-    )
-    header_font = Font(bold=True, color="FFFFFFFF")
+    header_fill = PatternFill(start_color=NAVY, end_color=NAVY, fill_type="solid")
+    header_font = Font(name=FONT_NAME, bold=True, color=WHITE, size=11)
+    zebra_fill = PatternFill(start_color=ZEBRA, end_color=ZEBRA, fill_type="solid")
+    body_font = Font(name=FONT_NAME, size=10)
+    thin_side = Side(style="thin", color=BORDER)
+    cell_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
 
     try:
         workbook = load_workbook(output_file)
@@ -166,27 +304,116 @@ def apply_workbook_formatting(output_file: Path) -> None:
                 if cell.value is not None:
                     cell.fill = header_fill
                     cell.font = header_font
+                    cell.alignment = Alignment(
+                        horizontal="center", vertical="center", wrap_text=True
+                    )
+                    cell.border = cell_border
+            sheet.row_dimensions[1].height = 30
 
-            # Size the columns.  Long free-text columns (memos, reasons,
-            # explanations) are capped so they do not push the numeric
-            # columns off the screen.
+            # Classify every column once, by its header.
+            kinds = [
+                _column_kind(sheet.cell(row=1, column=index).value or "")
+                for index in range(1, last_column + 1)
+            ]
+            text_columns = {
+                index
+                for index in range(1, last_column + 1)
+                if _is_text_column(sheet.cell(row=1, column=index).value or "")
+            }
+            # The columns a reviewer sorts or filters by, so the status tint
+            # lands where it is read.
+            status_columns = {
+                index
+                for index in range(1, last_column + 1)
+                if str(sheet.cell(row=1, column=index).value or "").strip()
+                in {
+                    "Suggested Recon Status",
+                    "Suggested Bank Status",
+                    "Status",
+                    "Recommended Action",
+                    "AI Exception Type",
+                }
+            }
+
+            for row_index in range(2, last_row + 1):
+                stripe = (row_index % 2) == 0
+                for column_index in range(1, last_column + 1):
+                    cell = sheet.cell(row=row_index, column=column_index)
+                    if cell.value is None:
+                        continue
+
+                    cell.font = body_font
+                    cell.border = cell_border
+
+                    kind = kinds[column_index - 1]
+                    if kind == "date" and _is_datetime_value(cell.value):
+                        cell.number_format = DATE_FORMAT
+                        cell.alignment = Alignment(horizontal="center", vertical="center")
+                    elif kind == "currency":
+                        cell.number_format = CURRENCY_FORMAT
+                        cell.alignment = Alignment(horizontal="right", vertical="center")
+                    elif kind == "percent":
+                        cell.number_format = PERCENT_FORMAT
+                        cell.alignment = Alignment(horizontal="right", vertical="center")
+                    elif isinstance(cell.value, (int, float)) and not isinstance(
+                        cell.value, bool
+                    ):
+                        # A plain number in a column whose header does not name
+                        # a format - a count in the Summary sheet, for example.
+                        # Right-aligned and grouped, but not given a currency
+                        # sign it does not have.
+                        cell.number_format = NUMBER_FORMAT
+                        cell.alignment = Alignment(horizontal="right", vertical="center")
+                    else:
+                        cell.alignment = Alignment(horizontal="left", vertical="center")
+
+                    if column_index in text_columns:
+                        cell.alignment = Alignment(
+                            horizontal="left", vertical="top", wrap_text=True
+                        )
+
+                    # The status tint wins over the zebra stripe: a reviewer
+                    # scanning for exceptions should not have to fight the
+                    # banding to find them.
+                    tint = None
+                    if column_index in status_columns:
+                        tint = _status_fill(cell.value)
+                    if tint:
+                        cell.fill = PatternFill(
+                            start_color=tint, end_color=tint, fill_type="solid"
+                        )
+                    elif stripe:
+                        cell.fill = zebra_fill
+
+            # Size the columns from their content.  Long free-text columns
+            # (memos, reasons, explanations) are capped so they do not push
+            # the numeric columns off the screen.
             for column_index in range(1, last_column + 1):
                 letter = get_column_letter(column_index)
                 header = sheet.cell(row=1, column=column_index).value or ""
-                header = str(header).lower()
-                if any(
-                    token in header
-                    for token in ("memo", "reason", "note", "explanation", "treatment")
-                ):
+                header_text = str(header)
+                longest = len(header_text)
+                for row_index in range(2, min(last_row, 60) + 1):
+                    value = sheet.cell(row=row_index, column=column_index).value
+                    if value is None:
+                        continue
+                    length = len(str(value))
+                    if length > longest:
+                        longest = length
+                        if longest > 60:
+                            break
+
+                if column_index in text_columns:
                     width = 45
-                elif "date" in header:
+                elif kinds[column_index - 1] == "date":
                     width = 12
-                elif "amount" in header or "total" in header or "difference" in header:
+                elif kinds[column_index - 1] in {"currency", "percent"}:
                     width = 16
-                elif "invoice" in header:
+                elif "invoice" in header_text.lower():
                     width = 18
                 else:
-                    width = 22
+                    # Fit the content, within reason.
+                    width = max(10, min(longest + 2, 30))
 
                 sheet.column_dimensions[letter].width = width
 
