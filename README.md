@@ -21,6 +21,8 @@
 - [AI Exception Resolution Agent](#ai-exception-resolution-agent)
 - [Human-in-the-Loop Approval](#human-in-the-loop-approval)
 - [Output](#output)
+  - [Data Quality Checks](#data-quality-checks)
+  - [AI Exception Log](#ai-exception-log)
 - [Current Capabilities](#current-capabilities)
 - [Roadmap](#roadmap)
 - [Business Value](#business-value)
@@ -305,6 +307,8 @@ python scripts/run_local_model.py --model qwen2.5:7b
 
 The agent writes an `AI Exception Review` sheet and an `AI Exception Log` sheet
 into the result workbook, plus a durable `AI_Exception_Approvals.xlsx` ledger.
+The log sheet records every repair the validator made to the model's own
+recommendation, and stays empty when there was nothing to repair.
 
 See [Free and Open-Source Model Backends](docs/local_models.md) for the local
 model setup, model selection and privacy notes.
@@ -394,7 +398,9 @@ Read `Bank_Cash_Receipts.xlsx` (sheet `Bank Receipts`) and `Open_AR_Detail.xlsx`
 ### Step 2 — Validate source data quality
 
 Detect AR rows that are closed or reconciled but still carry a non-zero open
-amount. Findings go to the `Data Quality Checks` sheet.
+amount. Findings go to the `Data Quality Checks` sheet, and such rows are
+excluded from auto-matching. The sheet is empty when the source data is
+consistent — see [Data Quality Checks](#data-quality-checks).
 
 ### Step 3 — Extract invoice references
 
@@ -548,7 +554,11 @@ The model is never trusted. Every answer is repaired or downgraded:
 - A scenario the engine marked review-only can never be auto-matched.
 - A receipt with no positive net amount (refund, chargeback) can never be applied.
 
-Every repair is recorded in the `AI Exception Log` sheet.
+Every repair is recorded in the `AI Exception Log` sheet, so the gate is
+auditable rather than merely asserted. That sheet is empty in this repository
+because the rules backend already produces the most conservative action
+available for every receipt it cannot settle, leaving the validator nothing
+to downgrade — see [AI Exception Log](#ai-exception-log).
 
 ---
 
@@ -591,10 +601,10 @@ approval is dropped and the row goes back for review.
 | Reconciled Open AR | Open AR detail with match results, applied/residual amounts and notes. |
 | Processed Bank Receipts | Bank receipts with match method, extracted invoices and suggested status. |
 | Unmatched Bank Receipts | Receipts routed to review or exception, with the reason. |
-| Data Quality Checks | AR data quality issues found during processing. |
+| Data Quality Checks | AR data quality issues found during processing. Empty when the source data is consistent — see [Data Quality Checks](#data-quality-checks). |
 | Summary | Run metrics and the AR/bank control total check. |
 | AI Exception Review | The AI agent's recommendation for each unmatched receipt, with the approval column. |
-| AI Exception Log | Every validation repair, model error and apply outcome. |
+| AI Exception Log | Every validation repair, model error and apply outcome. Empty when nothing had to be repaired — see [AI Exception Log](#ai-exception-log). |
 
 Every reviewable sheet has a frozen header row and an auto-filter, so the
 reviewer can narrow a 200-row sheet down to the receipts they need to act on.
@@ -617,6 +627,69 @@ A difference of `0.00` usually means the receipt would settle the invoice
 exactly but was held back for another reason (a collector hold, a tax
 withholding, a dispute) — the reviewer only has to confirm that reason, not
 re-derive the match.
+
+### Data Quality Checks
+
+Rows of the source AR that are internally inconsistent and therefore must not
+be auto-matched. The check is narrow on purpose: an AR row that is marked
+`Closed` or `Reconciled` but still carries a non-zero Open Amount cannot be
+matched safely, so it is reported instead of silently skipped.
+
+| Column | Meaning |
+|---|---|
+| `Issue` | What is wrong with the row. |
+| `AR Row Index` | The row's index in the source workbook, so the source can be corrected. |
+| `ERP Customer ID`, `Customer Name`, `Invoice Number` | Which row it is. |
+| `Open Amount` | The balance that should have been zero. |
+| `AR Status`, `Reconciliation Status` | The status that contradicts the open amount. |
+| `Recommendation` | What to do about it — review the ERP data sync or the source mapping. |
+
+**The sheet is empty in this repository, and that is the expected result.**
+The sample dataset has 191 AR rows and every one of them is `Open` in both
+`AR Status` and `Reconciliation Status`, so there is no inconsistent row to
+report. The sheet keeps its headers even when it is empty, so a reviewer can
+tell "no issues found" apart from "the check never ran".
+
+### AI Exception Log
+
+The audit trail of the agent's safety gate and of the approval pass. A row is
+written every time a recommendation was **changed** before it reached the
+review sheet, and every time the reviewer's approval was **acted on**.
+
+**Analysis phase** — what the agent did with its own recommendation:
+
+| `Outcome` | What it means |
+|---|---|
+| `Validation` | The validator downgraded the recommendation — for example an `Auto Match` on a review-only scenario became a `Recommend Match`. The `Detail` column says which rule fired. |
+| `Model Error` | The model call failed. The agent fell back to the deterministic rules backend for that receipt, and the error is recorded here. |
+| `Skipped` | The receipt was not present in the processed bank receipts sheet, so it could not be analysed. |
+
+**Approval phase** — what `--apply-approved` did with the reviewer's decision:
+
+| `Outcome` | What it means |
+|---|---|
+| `Applied` | The approved amount was written to AR against the named invoices. |
+| `Adjusted` | The approved amount exceeded the amount still open on the invoice, so it was capped. The receipt still received cash, just less than was approved. |
+| `Rejected` | The approval could not be carried out — the row named no invoice, the invoice carried no open balance, the amount was zero or negative, or the invoice had already been applied by another receipt. The reason is in `Detail`. |
+| `Skipped` | The receipt had already been applied to AR. Re-running never applies the same cash twice. |
+
+**The sheet is empty in this repository, and that is also the expected
+result.** The deterministic rules backend already recommends `Manual Review`,
+`Hold / Escalate` or `Return to Customer` for every receipt it cannot settle
+confidently — the most conservative action available — so there is nothing
+left for the validator to downgrade, and nothing to log. The approval phase
+adds nothing either, because no receipt has been approved yet.
+
+The log is what makes the gate auditable rather than merely asserted. A
+documented example: `qwen3:8b` classified `BTRX-000158`, a tax withholding
+receipt, as `Short Payment` and returned `Auto Match` with `High` confidence.
+The validator caught it twice over — the `Tax Withholding` scenario is
+review-only in the deterministic engine, so the action was downgraded to
+`Recommend Match`, and the invoice and amount it proposed were both correct.
+That repair is one row in this sheet.
+
+Both sheets keep their headers when empty, so a workbook always shows the
+same shape.
 
 ### `AI_Exception_Approvals.xlsx`
 
