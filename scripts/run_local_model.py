@@ -54,6 +54,7 @@ if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from ar_reconciliation.agent import exception_agent as A  # noqa: E402
+from ar_reconciliation.config import load_env  # noqa: E402
 
 DEFAULT_BASE_URL = "http://localhost:11434/v1"
 DEFAULT_MODEL = "qwen2.5:7b"
@@ -97,6 +98,10 @@ def check_server(base_url: str) -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Loaded before the parser is built, because the parser reads the
+    # environment for its defaults.
+    load_env()
+
     parser = argparse.ArgumentParser(
         description="Run the exception agent against a local Ollama model.",
     )

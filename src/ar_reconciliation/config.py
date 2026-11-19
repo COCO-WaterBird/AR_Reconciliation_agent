@@ -17,6 +17,7 @@ Source workbooks are read-only by contract.  The engine never writes to
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 __all__ = [
@@ -36,6 +37,8 @@ __all__ = [
     "AR_SHEET",
     "REVIEW_SHEET",
     "REVIEW_LOG_SHEET",
+    "ENV_FILE",
+    "load_env",
     "resolve_output_path",
 ]
 
@@ -105,3 +108,80 @@ def resolve_output_path(filename: str = RESULT_WORKBOOK_NAME) -> Path:
     can never overwrite the data it was given.
     """
     return OUTPUT_DIR / filename
+
+
+# --- Environment ----------------------------------------------------------
+
+#: The local environment file.  It holds credentials and local overrides
+#: and is never committed - ``.gitignore`` excludes it.
+ENV_FILE = PROJECT_ROOT / ".env"
+
+
+def load_env(env_file: Path | None = None) -> dict[str, str]:
+    """
+    Load ``.env`` into the process environment.
+
+    The file is optional: the project runs without it, and the rules backend
+    never needs it.  A key already present in the environment wins, so
+    ``OPENAI_API_KEY=... python scripts/run_agent.py`` still overrides the
+    file.
+
+    ``python-dotenv`` is used when it is installed.  When it is not, a small
+    built-in parser handles the common ``KEY=value`` form, so the project
+    does not force a dependency on a machine that only runs the
+    deterministic engine.
+
+    Returns the values that were loaded.
+    """
+    target = env_file if env_file is not None else ENV_FILE
+    if not target.exists():
+        return {}
+
+    try:
+        from dotenv import dotenv_values
+
+        values = {k: v for k, v in dotenv_values(target).items() if v is not None}
+    except ImportError:
+        values = _parse_env_file(target)
+
+    loaded: dict[str, str] = {}
+    for key, value in values.items():
+        if key in os.environ:
+            # The real environment wins: an explicit export is a deliberate
+            # override of the file.
+            continue
+        os.environ[key] = value
+        loaded[key] = value
+    return loaded
+
+
+def _parse_env_file(path: Path) -> dict[str, str]:
+    """
+    Read a ``KEY=value`` file without python-dotenv.
+
+    Supports ``#`` comments, blank lines, an optional ``export`` prefix and
+    values wrapped in matching single or double quotes.
+    """
+    values: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return values
+
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        values[key] = value
+    return values

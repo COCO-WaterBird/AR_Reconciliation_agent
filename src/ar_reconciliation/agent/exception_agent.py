@@ -79,6 +79,7 @@ from ar_reconciliation.config import (
     RESULT_FILE,
     REVIEW_LOG_SHEET,
     REVIEW_SHEET,
+    load_env,
 )
 from ar_reconciliation.core.primitives import (
     cents_to_money,
@@ -726,6 +727,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # Load .env before the parser is built: the parser reads the
+    # environment for its defaults, so the file has to be in place first.
+    load_env()
+
     args = build_parser().parse_args(argv)
 
     print("=" * 72)

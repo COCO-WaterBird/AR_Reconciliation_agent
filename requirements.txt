@@ -8,3 +8,7 @@ openpyxl>=3.1
 # Only needed for the LLM backend (--backend llm). The rules backend and the
 # deterministic engine do not import it.
 openai>=1.0
+
+# Optional. The project reads .env with a built-in parser when this is not
+# installed, so it is a convenience rather than a requirement.
+# python-dotenv>=1.0
