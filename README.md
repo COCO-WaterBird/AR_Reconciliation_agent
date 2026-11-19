@@ -44,7 +44,12 @@ operations. Finance teams often spend hours every day:
 - Processing bank fees
 - Preparing reconciliation reports
 
-This project transforms that workflow into an AI-assisted reconciliation platform.
+This project transforms that workflow into an AI-assisted reconciliation agent.
+
+It reads a bank statement workbook and an open AR workbook, reconciles them
+against deterministic rules, and writes the results — confirmed matches, the
+evidence behind them, and AI suggestions for the receipts it cannot settle —
+into a single Excel report for a human to review.
 
 Instead of replacing accounting rules with AI, the project follows one design
 principle:
@@ -54,6 +59,9 @@ principle:
 The reconciliation engine performs all financial calculations using deterministic
 rules, while AI is responsible for understanding unstructured payment information,
 explaining exceptions, and recommending next actions.
+
+The agent never applies cash and never modifies an AR balance on its own. Its
+suggestions are proposals in the report; a human decides what happens next.
 
 The objective is **not** to replace accountants. The objective is to eliminate
 repetitive reconciliation work while maintaining financial accuracy, internal
@@ -91,6 +99,12 @@ When deterministic matching cannot confidently reconcile a payment, the AI agent
 - Generates human-readable reconciliation notes
 - Routes high-risk cases for approval
 
+Everything it produces is a **suggestion written into the report**. The agent
+never applies cash, never modifies an AR balance, and never approves its own
+proposal — a recommendation only becomes a match after a human acts on it, and
+the confirmed rule-based matches stay separate from the suggestions in
+separate sheets.
+
 ### What one run produces
 
 ![Reconciliation run results: receipt outcomes, top AI exception types and control totals](docs/images/results.png)
@@ -100,33 +114,42 @@ When deterministic matching cannot confidently reconcile a payment, the AI agent
 ## Architecture
 
 ```
-                Bank Receipts
-                      │
-                      ▼
-             Data Validation Agent
-                      │
-                      ▼
-         Deterministic Matching Engine
-          ├── Invoice Match
-          ├── Customer Match
-          ├── Currency Match
-          ├── Amount Match
-          └── Combination Match
-                      │
-          ┌───────────┴────────────┐
-          │                        │
-          ▼                        ▼
-   Auto Reconciled          AI Exception Agent
-                                      │
-                                      ▼
-                          Root Cause Analysis
-                                      │
-                                      ▼
-                            Human Approval
-                                      │
-                                      ▼
-                          ERP Posting Ready
+        Bank Statement Excel        AR Open Items Excel
+                      │                       │
+                      └───────────┬───────────┘
+                                  ▼
+                       Data Validation
+                                  │
+                                  ▼
+              Deterministic Matching Engine
+               ├── Invoice Match
+               ├── Customer Match
+               ├── Currency Match
+               ├── Amount Match
+               └── Combination Match
+                                  │
+                 ┌────────────────┴────────────────┐
+                 ▼                                 ▼
+        Confirmed Matches                   AI Exception Agent
+        (rule + evidence)                          │
+                                                    ▼
+                                        Root Cause Analysis
+                                                    │
+                                                    ▼
+                                       Matching Suggestions
+                                                    │
+                                                    ▼
+                                  Reconciliation Results Excel
 ```
+
+**The control boundary.** The deterministic engine is the only component that
+can move money. The AI agent analyses, explains and recommends — it never applies a
+reconciliation on its own. Every AI proposal must pass a validator, and it is only
+written back to AR after a human sets `Approval = APPROVE` in the review sheet.
+
+**The output boundary.** Confirmed rule-based matches and AI suggestions are
+reported separately and never merged into one column. The report is the
+deliverable: the agent applies no cash and changes no AR balance on its own.
 
 **The control boundary.** The deterministic engine is the only component that can
 move money. The AI agent analyses, explains and recommends — it never applies a
@@ -163,10 +186,6 @@ and every exception taxonomy is stated once, with the reason it has that value.
 | Data Processing | Pandas | In use |
 | Excel Processing | OpenPyXL | In use |
 | AI (exception analysis) | OpenAI-compatible chat API | In use, optional |
-| API Service | FastAPI | Planned |
-| Database | PostgreSQL | Planned |
-| Workflow Automation | n8n | Planned |
-| Dashboard | Power BI | Planned |
 | Version Control | Git | In use |
 
 ---
@@ -313,12 +332,22 @@ recommendation, and stays empty when there was nothing to repair.
 See [Free and Open-Source Model Backends](docs/local_models.md) for the local
 model setup, model selection and privacy notes.
 
-### 4. Review and approve
+### 4. Review the report
 
-Open the `AI Exception Review` sheet, read the recommendation for each receipt and
-set `Approval` to `APPROVE` on the rows you accept.
+Open the result workbook. The `AI Exception Review` sheet holds the AI's
+suggestion for every receipt the engine could not settle: the exception type,
+the root cause, the proposed invoice and amount, and the reasoning behind it.
 
-### 5. Apply the approvals
+This is where the MVP ends. The report is the deliverable — read it, check the
+evidence, and decide what to do next.
+
+### 5. Optionally apply human approvals
+
+> Not part of the MVP scope — this is an optional local path for acting on the
+> report. See [Roadmap](#roadmap).
+
+If you want the agent's proposals applied back to AR, set `Approval` to
+`APPROVE` on the rows you accept, then run:
 
 ```bash
 python scripts/run_agent.py --apply-approved
@@ -422,10 +451,14 @@ short pays and overpayments stay in `Pending Review`.
 Every receipt that could not be reconciled is analysed by the agent, which
 classifies the exception, explains the root cause and recommends a next action.
 
-### Step 7 — Human approval and reporting
+### Step 7 — Report
 
-A reviewer approves or rejects each recommendation. Approved recommendations are
-applied to AR, and the reports are generated.
+The confirmed matches, the unmatched receipts, the AI suggestions and the
+control totals are written into the reconciliation results workbook. This is
+where the MVP ends: a human reads the report and decides what to do next.
+
+An optional local path then applies the recommendations a human approved —
+see [Human-in-the-Loop Approval](#human-in-the-loop-approval).
 
 ---
 
@@ -564,6 +597,11 @@ to downgrade — see [AI Exception Log](#ai-exception-log).
 
 ## Human-in-the-Loop Approval
 
+> **Not part of the MVP scope.** The MVP produces a report; this section
+> describes an optional local path for acting on it. The code works and is
+> useful for a walkthrough, but a hosted approval service is explicitly out of
+> scope — see [Roadmap](#roadmap).
+
 The agent recommends. It does not decide.
 
 ```
@@ -594,6 +632,11 @@ approval is dropped and the row goes back for review.
 
 ## Output
 
+The MVP produces one workbook. It carries the matching evidence for every row
+— the source transaction ID, the rule that fired, the discrepancy and the
+reasoning — so a reviewer can judge each match without opening the source
+files.
+
 ### `Open_AR_Detail_Reconciled_Result.xlsx`
 
 | Sheet | Purpose |
@@ -605,6 +648,20 @@ approval is dropped and the row goes back for review.
 | Summary | Run metrics and the AR/bank control total check. |
 | AI Exception Review | The AI agent's recommendation for each unmatched receipt, with the approval column. |
 | AI Exception Log | Every validation repair, model error and apply outcome. Empty when nothing had to be repaired — see [AI Exception Log](#ai-exception-log). |
+
+**Confirmed matches and AI suggestions are reported separately and are never
+mixed.** A row in `Reconciled Open AR` and `Processed Bank Receipts` carries a
+`Match Method` — the rule that fired — and a `Reconciliation Notes` cell naming
+the source transaction, the invoices it settled, the amount applied and the
+reason. Those are the confirmed, rule-based matches. A row in
+`AI Exception Review` carries an `AI Exception Type`, a root cause, a proposed
+invoice and amount, and an `AI Explanation`; those are the suggestions, and
+they are proposals only.
+
+The two sets never share a column, so a suggestion can never be read as a
+confirmed match. Nothing in this report applies cash on its own, and the
+source columns `Open Amount`, `AR Status` and `Reconciliation Status` are
+never modified — every result lands in a new output column.
 
 Every reviewable sheet has a frozen header row and an auto-filter, so the
 reviewer can narrow a 200-row sheet down to the receipts they need to act on.
@@ -718,26 +775,70 @@ decisions, so they survive a re-run of the reconciliation engine.
   the approval gate
 - Continuous integration with a stored regression baseline
 
-**Not implemented**
+**Out of scope for the MVP**
 
 - Automated posting to a general ledger
 - Approval workflow service, email notification and SSO
 - Multi-currency revaluation and FX rate tables
 - Persistent storage (the engine is file-based by design)
 
+See [Roadmap](#roadmap) for why each of these was dropped and what the MVP
+scope is instead.
+
 ---
 
 ## Roadmap
 
-- [x] Phase 1 — Rule-based reconciliation engine
-- [x] Phase 4 — AI Exception Resolution Agent
-- [x] Test suite and CI with a regression baseline
-- [ ] Phase 2 — FastAPI service
-- [ ] Phase 3 — PostgreSQL
-- [ ] Phase 5 — Human approval workflow
-- [ ] Phase 6 — n8n workflow automation
-- [ ] Phase 7 — Power BI dashboard
-- [ ] Phase 8 — ERP journal entry integration
+The goal is a portfolio-ready Finance AI Agent MVP: a working, demonstrable
+agent — not an ERP platform.
+
+**MVP scope**
+
+| | |
+|---|---|
+| Input | Bank Statement Excel + AR Open Items Excel |
+| Output | Reconciliation Results Excel |
+| Storage | None. File-based, read-only sources |
+
+The MVP stops at the report. It reads two workbooks, reconciles them against
+deterministic rules, adds AI suggestions for the receipts it cannot settle,
+and writes everything — the evidence and the suggestions — into one Excel
+report for a human to read.
+
+**Delivered**
+
+- [x] Rule-based reconciliation engine — deterministic matching in exact
+      integer cents, one-to-one and one-to-many
+- [x] Matching evidence in the report — source transaction IDs, the rule that
+      fired, the discrepancy and the reasoning, per row
+- [x] AI exception investigation and matching suggestions — deterministic and
+      LLM backends behind one interface; suggestions are written to the report
+      as proposals, never applied
+- [x] Clear separation of confirmed and suggested — rule-based matches and
+      AI-suggested matches are reported separately and are never mixed
+- [x] Duplicate-application prevention — a receipt is never applied twice
+- [x] Regression tests — 119 tests and a stored baseline
+
+**Out of scope for the MVP**
+
+The MVP deliberately stops at the report. These were considered and dropped:
+
+| Dropped | Why |
+|---|---|
+| Approval workflow service | The MVP produces a report for a human to read and act on. A hosted approval flow is a deployment decision, not a demonstration requirement |
+| Email notifications | The reviewer opens the report. Notification is a deployment decision |
+| SSO | There is no multi-tenant user model in the MVP |
+| GL posting | The agent never posts. It advises |
+| Complex audit trail | The report carries the evidence per row. A separate audit system is not needed to show the reasoning |
+| PostgreSQL | The engine is file-based by design |
+| n8n workflow automation | Two script invocations are the whole workflow |
+| Power BI dashboard | The Excel report answers the questions a dashboard would |
+| Live ERP integration | Nothing posts to a ledger. The agent advises; a human decides |
+
+The local approval path described in
+[Human-in-the-Loop Approval](#human-in-the-loop-approval) still works and is
+still useful for a local walkthrough, but it is not part of the MVP scope
+above.
 
 ---
 
@@ -750,7 +851,6 @@ Potential use cases include:
 - Finance Shared Services
 - Cash Application
 - Treasury Operations
-- ERP Integration
 - Finance Systems Modernization
 - AI-Powered Finance Automation
 
