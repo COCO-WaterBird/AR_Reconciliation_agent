@@ -28,16 +28,15 @@ env/
 # credentials.  Replace them with your own workbooks locally, but keep the
 # directory structure.
 #
-# data/output/ holds what a run produces.  The reconciled workbook and the
-# approval ledger are committed for this repository only because they carry
-# no real customer data - the sample data is synthetic - and because keeping
-# them lets a reviewer diff the result of two runs.
+# data/output/ holds what a run produces.  The reconciled workbook is
+# committed for this repository only because it carries no real customer
+# data - the sample data is synthetic - and because keeping it lets a
+# reviewer diff the result of two runs.
 #
-# If you replace the sample data with real workbooks, remove the two lines
+# If you replace the sample data with real workbooks, remove the line
 # below so no customer name, invoice number or bank transaction ID ever
 # reaches version control.
 #
-# data/output/AI_Exception_Approvals.xlsx
 # data/output/Open_AR_Detail_Reconciled_Result.xlsx
 
 # Local overrides that may hold credentials or paths.
@@ -46,5 +45,4 @@ env/
 *.local.toml
 
 # Scratch workbooks written outside data/output/.
-AI_Exception_Approvals*.xlsx
 Open_AR_Detail_Reconciled_Result *.xlsx

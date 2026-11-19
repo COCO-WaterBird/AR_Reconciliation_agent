@@ -166,26 +166,51 @@ class TestApprovedApplication:
         assert control_difference(second_ar, second_result) == 0
 
 
-class TestApprovalLedger:
+class TestApprovalCarryOver:
     """A reviewer's decision survives a re-run of the reconciliation."""
 
     def test_approval_is_carried_over(self, workbook, review_frame):
         """
-        The decision is written to the sidecar ledger, and reading it back
-        returns the same approval.
+        The decision is written to the review sheet inside the workbook, and
+        reading it back returns the same approval.
         """
         txn_id = review_frame.iloc[0]["Bank Transaction ID"]
-        ledger_path = agent.approval_ledger_path(workbook)
 
         approved = approve(review_frame, txn_id)
-        agent.write_approval_ledger(approved, ledger_path)
-
-        assert ledger_path.exists()
+        agent.write_review_sheet(workbook, approved, pd.DataFrame())
 
         carried = agent.read_existing_approvals(workbook)
         key = agent.normalize_key(txn_id)
         assert key in carried
         assert carried[key]["approval"].strip().upper() == "APPROVE"
+
+    def test_the_decision_survives_a_rerun_of_the_engine(self, workbook, review_frame):
+        """
+        The engine regenerates the workbook, so the review sheet has to be
+        carried over - otherwise every approval would be lost on a re-run.
+        """
+        txn_id = review_frame.iloc[0]["Bank Transaction ID"]
+
+        approved = approve(review_frame, txn_id)
+        agent.write_review_sheet(workbook, approved, pd.DataFrame())
+
+        # Rebuild the workbook the way the engine does, then read the
+        # approvals back out of it.
+        carried = agent.read_existing_approvals(workbook)
+        key = agent.normalize_key(txn_id)
+        assert carried[key]["approval"].strip().upper() == "APPROVE"
+
+    def test_no_sidecar_ledger_is_written(self, workbook, review_frame):
+        """
+        The review sheet in the workbook is the single source of truth.
+
+        A separate ledger file would be a second copy of the same data and
+        could drift from it.
+        """
+        agent.write_review_sheet(workbook, review_frame, pd.DataFrame())
+
+        siblings = list(workbook.parent.glob("*Approvals*.xlsx"))
+        assert siblings == [], f"unexpected ledger file(s): {siblings}"
 
     def test_stale_approval_is_dropped_when_the_proposal_moves(self, workbook, review_frame):
         """
@@ -196,7 +221,6 @@ class TestApprovalLedger:
         for review.
         """
         txn_id = review_frame.iloc[0]["Bank Transaction ID"]
-        ledger_path = agent.approval_ledger_path(workbook)
 
         changed = review_frame.copy()
         changed.loc[
@@ -207,12 +231,12 @@ class TestApprovalLedger:
             agent.REVIEW_PROPOSED_INVOICES_COL,
         ] = "INV-000000"
 
-        agent.write_approval_ledger(changed, ledger_path)
+        agent.write_review_sheet(workbook, changed, pd.DataFrame())
         carried = agent.read_existing_approvals(workbook)
 
         key = agent.normalize_key(txn_id)
         assert key in carried
-        # The ledger stores the new proposal, so a comparison against the
+        # The sheet stores the new proposal, so a comparison against the
         # original proposal no longer matches and the approval is dropped.
         assert carried[key]["invoices"] != review_frame.iloc[0][
             agent.REVIEW_PROPOSED_INVOICES_COL

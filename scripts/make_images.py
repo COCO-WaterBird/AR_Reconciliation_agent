@@ -290,7 +290,7 @@ def draw_workflow(path: Path, data: dict[str, object]) -> None:
     ax.text(2, 8.0,
             "Validator: caps proposed amounts, downgrades confidence that a human has not approved",
             fontsize=10, color=MUTED, va="top")
-    ax.text(98, 8.0, "Audit ledger: AI_Exception_Approvals.xlsx",
+    ax.text(98, 8.0, "Audit trail: AI Exception Review + AI Exception Log sheets",
             fontsize=10, color=BLUE, va="top", ha="right")
 
     fig.savefig(path)

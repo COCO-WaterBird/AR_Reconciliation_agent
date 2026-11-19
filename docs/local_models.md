@@ -298,5 +298,5 @@ Running locally means the remittance memo, the customer name and the invoice
 numbers never leave the machine. Nothing about the reconciliation data is sent
 to a model provider.
 
-The only thing written to disk is the review workbook and the approval ledger,
-both of which are local Excel files.
+The only thing written to disk is the review workbook, which is a local Excel
+file.

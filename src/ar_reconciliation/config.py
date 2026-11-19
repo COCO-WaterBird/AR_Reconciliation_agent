@@ -32,7 +32,6 @@ __all__ = [
     "BANK_FILE",
     "AR_FILE",
     "RESULT_FILE",
-    "APPROVAL_LEDGER_FILE",
     "BANK_SHEET",
     "AR_SHEET",
     "REVIEW_SHEET",
@@ -63,7 +62,6 @@ BASELINE_FILE = DATA_DIR / "baseline.json"
 BANK_WORKBOOK_NAME = "Bank_Cash_Receipts.xlsx"
 AR_WORKBOOK_NAME = "Open_AR_Detail.xlsx"
 RESULT_WORKBOOK_NAME = "Open_AR_Detail_Reconciled_Result.xlsx"
-APPROVAL_LEDGER_NAME = "AI_Exception_Approvals.xlsx"
 
 # --- Sheet names ----------------------------------------------------------
 
@@ -95,9 +93,6 @@ AR_FILE = _resolve(INPUT_DIR / AR_WORKBOOK_NAME, SAMPLE_DIR / AR_WORKBOOK_NAME)
 
 #: Where a run writes the reconciled workbook.
 RESULT_FILE = OUTPUT_DIR / RESULT_WORKBOOK_NAME
-
-#: The durable review / approval ledger.
-APPROVAL_LEDGER_FILE = OUTPUT_DIR / APPROVAL_LEDGER_NAME
 
 
 def resolve_output_path(filename: str = RESULT_WORKBOOK_NAME) -> Path:
