@@ -24,7 +24,21 @@ from ar_reconciliation.rules.policies import (
     RECOMMENDED_ACTIONS,
 )
 
-__all__ = ["validate_recommendation"]
+__all__ = ["validate_recommendation", "max_appliable_cents"]
+
+
+def max_appliable_cents(context: ExceptionContext) -> int:
+    """
+    The most cash a recommendation may apply for this receipt.
+
+    The cash that actually arrived (net), or the gross amount when no net
+    amount is recorded.  Negative for a refund or chargeback, which means
+    nothing may be applied.  The approval write-back uses the same cap, so a
+    reviewer cannot approve more cash than the receipt carries.
+    """
+    if context.net_amount_cents > 0:
+        return context.net_amount_cents
+    return context.gross_amount_cents
 
 
 def validate_recommendation(
@@ -81,11 +95,7 @@ def validate_recommendation(
 
     # --- Proposed amount must not exceed the cash actually received ---
     proposed_amount_cents = money_to_cents(raw.get("proposed_amount", 0))
-    max_appliable = (
-        context.net_amount_cents
-        if context.net_amount_cents > 0
-        else context.gross_amount_cents
-    )
+    max_appliable = max_appliable_cents(context)
     if proposed_amount_cents < 0:
         notes.append("proposed amount was negative; reset to 0.")
         proposed_amount_cents = 0

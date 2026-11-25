@@ -241,3 +241,107 @@ class TestApprovalCarryOver:
         assert carried[key]["invoices"] != review_frame.iloc[0][
             agent.REVIEW_PROPOSED_INVOICES_COL
         ]
+
+
+class TestApprovalRevalidation:
+    """
+    P0-5: an approval is re-validated before any cash moves.
+
+    The reviewer works in Excel and may edit the proposal cells, so the
+    write-back must not trust them.
+    """
+
+    @pytest.fixture
+    def approvable_row(self, review_frame):
+        rows = review_frame[
+            (review_frame["Recommended Action"] == "Recommend Match")
+            & (review_frame["Proposed Invoice Numbers"].fillna("").str.len() > 0)
+            & (review_frame["Proposed Applied Amount"].fillna(0).astype(float) > 0)
+        ]
+        assert len(rows) > 0
+        return rows.iloc[0]
+
+    @staticmethod
+    def _frames(workbook):
+        return (
+            pd.read_excel(workbook, sheet_name="Reconciled Open AR"),
+            pd.read_excel(workbook, sheet_name="Processed Bank Receipts"),
+        )
+
+    def test_invoice_of_another_customer_is_rejected(self, workbook, review_frame, approvable_row):
+        ar_df, result_df = self._frames(workbook)
+        txn_id = approvable_row["Bank Transaction ID"]
+        bank = result_df[result_df["Bank Transaction ID"] == txn_id].iloc[0]
+
+        # An open invoice that belongs to a different customer.
+        other = ar_df[
+            (ar_df["ERP Customer ID"].astype(str) != str(bank["ERP Customer ID"]))
+            & (ar_df["Applied Amount"].fillna(0).astype(float) == 0)
+            & (ar_df["Open Amount"] > 0)
+        ].iloc[0]
+
+        edited = approve(review_frame, txn_id)
+        edited.loc[edited["Bank Transaction ID"] == txn_id, "Proposed Invoice Numbers"] = (
+            other["Invoice Number"]
+        )
+
+        updated_ar, _r, log = agent.apply_approved_recommendations(
+            result_df=result_df, ar_df=ar_df, review_df=edited
+        )
+
+        assert [entry["Outcome"] for entry in log] == ["Rejected"]
+        assert updated_ar["Applied Amount"].fillna("").tolist() == ar_df[
+            "Applied Amount"
+        ].fillna("").tolist()
+
+    def test_amount_above_the_receipt_cash_is_rejected(self, workbook, review_frame, approvable_row):
+        ar_df, result_df = self._frames(workbook)
+        txn_id = approvable_row["Bank Transaction ID"]
+        bank = result_df[result_df["Bank Transaction ID"] == txn_id].iloc[0]
+
+        edited = approve(review_frame, txn_id)
+        edited.loc[edited["Bank Transaction ID"] == txn_id, "Proposed Applied Amount"] = (
+            float(bank["Gross Receipt Amount"]) + 1000
+        )
+
+        updated_ar, _r, log = agent.apply_approved_recommendations(
+            result_df=result_df, ar_df=ar_df, review_df=edited
+        )
+
+        assert [entry["Outcome"] for entry in log] == ["Rejected"]
+        assert "exceeds the cash" in log[0]["Detail"]
+        assert updated_ar["Applied Amount"].fillna("").tolist() == ar_df[
+            "Applied Amount"
+        ].fillna("").tolist()
+
+    def test_all_controls_tie_after_applying(self, workbook, review_frame, approvable_row):
+        from ar_reconciliation.services.controls import compute_output_controls
+
+        ar_df, result_df = self._frames(workbook)
+        approved = approve(review_frame, approvable_row["Bank Transaction ID"])
+
+        updated_ar, updated_result, log = agent.apply_approved_recommendations(
+            result_df=result_df, ar_df=ar_df, review_df=approved
+        )
+
+        assert [entry["Outcome"] for entry in log] in (["Applied"], ["Adjusted"])
+        controls = compute_output_controls(updated_ar, updated_result)
+        assert controls.balanced, controls.describe_breaks()
+
+    def test_cli_marks_the_row_applied_and_refreshes_the_summary(
+        self, workbook, review_frame, approvable_row
+    ):
+        txn_id = approvable_row["Bank Transaction ID"]
+        agent.write_review_sheet(workbook, approve(review_frame, txn_id), pd.DataFrame())
+
+        assert agent.main(["--result", str(workbook), "--apply-approved"]) == 0
+
+        review = pd.read_excel(workbook, sheet_name=agent.REVIEW_SHEET)
+        applied_flag = review.loc[review["Bank Transaction ID"] == txn_id, "Applied To AR"]
+        assert applied_flag.tolist() == ["Yes"]
+
+        summary = pd.read_excel(workbook, sheet_name="Summary")
+        metrics = dict(zip(summary["Metric"], summary["Value"]))
+        assert int(metrics["AI-approved applications applied"]) == 1
+        assert float(metrics["Cash control difference"]) == 0.0
+        assert float(metrics["AR roll-forward difference"]) == 0.0

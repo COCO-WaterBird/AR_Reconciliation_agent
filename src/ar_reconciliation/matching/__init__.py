@@ -17,10 +17,11 @@ from ar_reconciliation.matching.candidates import (
     is_open_ar_row,
 )
 from ar_reconciliation.matching.memo import classify_memo, extract_invoice_numbers
-from ar_reconciliation.matching.models import CandidateInvoice, MatchResult
-from ar_reconciliation.matching.subset_sum import find_subset_sum
+from ar_reconciliation.matching.models import AmbiguousMatch, CandidateInvoice, MatchResult
+from ar_reconciliation.matching.subset_sum import find_subset_sum, find_subset_sums
 
 __all__ = [
+    "AmbiguousMatch",
     "CandidateInvoice",
     "MatchResult",
     "apply_match",
@@ -33,5 +34,6 @@ __all__ = [
     "find_invoice_reference_match",
     "find_partial_combination_match",
     "find_subset_sum",
+    "find_subset_sums",
     "is_open_ar_row",
 ]

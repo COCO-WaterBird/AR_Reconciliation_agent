@@ -53,6 +53,10 @@ def is_open_ar_row(ar_row: pd.Series) -> bool:
     amount_cents = int(ar_row.get("__ar_open_amount_cents", 0))
     if amount_cents <= 0:
         return False
+    # Held out by the input integrity checks (unreadable amount, duplicated
+    # invoice number).
+    if normalize_text(ar_row.get("__dq_reason", "")):
+        return False
     # Exclude only rows that are explicitly finalized.
     if recon_status in FINAL_RECON_STATUSES:
         return False
@@ -83,6 +87,11 @@ def build_candidate_mask(
     )
     fully_cleared = already_matched & (ar_df["__ar_open_amount_cents"] <= 0)
 
+    if "__dq_reason" in ar_df.columns:
+        integrity_ok = ar_df["__dq_reason"].fillna("").astype(str) == ""
+    else:
+        integrity_ok = pd.Series(True, index=ar_df.index)
+
     recon = ar_df[AR_RECON_STATUS_COL].fillna("").str.strip().str.lower()
     ar_status = ar_df[AR_STATUS_COL].fillna("").str.strip().str.lower()
 
@@ -94,6 +103,7 @@ def build_candidate_mask(
         & (~recon.isin(FINAL_RECON_STATUSES))
         & (~ar_status.isin(CLOSED_AR_STATUSES))
         & (~recon.isin(ON_HOLD_RECON_STATUSES))
+        & integrity_ok
     )
 
 

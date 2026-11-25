@@ -24,6 +24,7 @@ from ar_reconciliation.core.schema import (
     BANK_CUSTOMER_NAME_COL,
     BANK_FEES_COL,
     BANK_GROSS_AMOUNT_COL,
+    BANK_HELD_AMOUNT_COL,
     BANK_MEMO_COL,
     BANK_NET_AMOUNT_COL,
     BANK_POSTING_DATE_COL,
@@ -136,6 +137,20 @@ def route_to_review(
     )
     bank_df.at[bank_index, BANK_PROCESSING_NOTES_COL] = reason
     bank_df.at[bank_index, OUT_SUGGESTED_BANK_STATUS_COL] = status
+    _record_held_amount(bank_df, bank_index, bank_row)
+
+
+def _record_held_amount(
+    bank_df: pd.DataFrame, bank_index: int, bank_row: pd.Series
+) -> None:
+    """
+    Record the gross amount of a receipt that was not applied.
+
+    The cash control needs every receipt's gross amount to land in exactly
+    one bucket; for a receipt held in review, that bucket is this one.
+    """
+    gross_cents = int(bank_row.get("__gross_amount_cents", 0) or 0)
+    bank_df.at[bank_index, BANK_HELD_AMOUNT_COL] = cents_to_money(gross_cents)
 
 
 def summarise_candidates(
@@ -242,3 +257,4 @@ def mark_duplicate_receipt(
     bank_df.at[bank_index, OUT_MATCH_METHOD_BANK_COL] = "Duplicate Payment Check"
     bank_df.at[bank_index, OUT_SUGGESTED_BANK_STATUS_COL] = "Pending Review"
     bank_df.at[bank_index, BANK_APPLIED_AMOUNT_TOTAL_COL] = 0.0
+    _record_held_amount(bank_df, bank_index, bank_row)

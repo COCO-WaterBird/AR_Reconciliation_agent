@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-__all__ = ["CandidateInvoice", "MatchResult"]
+__all__ = ["CandidateInvoice", "MatchResult", "AmbiguousMatch"]
 
 
 @dataclass(frozen=True)
@@ -29,6 +29,17 @@ class MatchResult:
     ``applied_cents`` is what is to be applied to AR.  ``residual_cents`` is
     what is left open, and is signed: negative means the customer paid more
     than the referenced AR.
+
+    The cash side of the receipt is stated explicitly, branch by branch, so
+    the cash control can verify it rather than derive it:
+
+        gross receipt == applied_cents + unapplied_cents + adjustment_cents
+
+    ``unapplied_cents`` is cash received beyond the AR it settles (an
+    overpayment), which stays on account.  ``adjustment_cents`` is the part
+    of the gross amount that is neither applied nor unapplied cash: a bank
+    fee deducted before the AR was cleared at net, or a signed penny rounding
+    variance.
     """
 
     ar_indexes: list[int]
@@ -36,3 +47,17 @@ class MatchResult:
     residual_cents: int
     method: str
     note: str
+    unapplied_cents: int = 0
+    adjustment_cents: int = 0
+
+
+@dataclass(frozen=True)
+class AmbiguousMatch:
+    """
+    More than one set of open invoices explains the receipt equally well.
+
+    The engine must not choose between them, so the receipt is routed to
+    review with the alternatives it found.
+    """
+
+    alternatives: list[list[str]]
