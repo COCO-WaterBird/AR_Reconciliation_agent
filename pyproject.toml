@@ -23,10 +23,15 @@ llm = ["openai>=1.0"]
 # installed, so it is a convenience rather than a requirement.
 dotenv = ["python-dotenv>=1.0"]
 dev = ["pytest>=8.0"]
+# Reading PDF supporting documents (contracts, remittance advice).
+evidence = ["pypdf>=4.0"]
+# The single-page review UI (app/review_app.py).
+ui = ["streamlit>=1.30"]
 
 [project.scripts]
 ar-reconcile = "ar_reconciliation.cli:reconcile_main"
 ar-agent = "ar_reconciliation.cli:agent_main"
+ar-evidence = "ar_reconciliation.cli:evidence_main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

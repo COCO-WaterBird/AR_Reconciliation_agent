@@ -207,6 +207,37 @@ class LLMBackend:
             }
         return {"type": "json_object"}
 
+    # -- generic structured completion ---------------------------------------
+
+    def complete_json(
+        self, system: str, user: str, schema: dict[str, Any], name: str
+    ) -> dict[str, Any]:
+        """One structured completion with a caller-supplied schema."""
+        if self._probe_json_schema_support():
+            response_format: dict[str, Any] = {
+                "type": "json_schema",
+                "json_schema": {"name": name, "strict": True, "schema": schema},
+            }
+        else:
+            response_format = {"type": "json_object"}
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "temperature": 0,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "response_format": response_format,
+        }
+        if self._extra_body:
+            kwargs["extra_body"] = self._extra_body
+        response = self._client.chat.completions.create(**kwargs)
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            self.prompt_tokens += getattr(usage, "prompt_tokens", 0) or 0
+            self.completion_tokens += getattr(usage, "completion_tokens", 0) or 0
+        return parse_json_object(response.choices[0].message.content or "{}")
+
     # -- analysis ----------------------------------------------------------
 
     def analyse(self, context: Any) -> dict[str, Any]:

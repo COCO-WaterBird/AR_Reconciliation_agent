@@ -31,11 +31,16 @@ def max_appliable_cents(context: ExceptionContext) -> int:
     """
     The most cash a recommendation may apply for this receipt.
 
-    The cash that actually arrived (net), or the gross amount when no net
-    amount is recorded.  Negative for a refund or chargeback, which means
-    nothing may be applied.  The approval write-back uses the same cap, so a
-    reviewer cannot approve more cash than the receipt carries.
+    The gross receipt amount (business decision E5): the customer paid the
+    gross amount, and any bank fee deducted on the way is booked as a fee
+    adjustment, the same rule the deterministic engine applies.  The net
+    amount is used only when no gross amount is recorded.  Negative for a
+    refund or chargeback, which means nothing may be applied.  The approval
+    write-back uses the same cap, so a reviewer cannot approve more cash than
+    the receipt carries.
     """
+    if context.gross_amount_cents > 0:
+        return context.gross_amount_cents
     if context.net_amount_cents > 0:
         return context.net_amount_cents
     return context.gross_amount_cents

@@ -38,6 +38,14 @@ __all__ = [
 
 def rules_backend_analyse(context: ExceptionContext) -> dict[str, Any]:
     """Analyse one receipt with the deterministic rules backend."""
+    # A receipt with supporting documents is analysed from its evidence.
+    # Without documents the analysis below is unchanged.
+    from ar_reconciliation.agent.evidence_rules import analyse_with_evidence
+
+    evidence_answer = analyse_with_evidence(context)
+    if evidence_answer is not None:
+        return evidence_answer
+
     scenario = context.memo_scenario
     exception_type = SCENARIO_TO_EXCEPTION_TYPE.get(scenario, "Unknown")
 

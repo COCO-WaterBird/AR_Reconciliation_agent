@@ -65,9 +65,18 @@ from ar_reconciliation.agent.context import (
     Recommendation,
     build_context,
 )
+from ar_reconciliation.agent.resolution import (
+    Resolution,
+    format_adjustments,
+    format_allocations,
+    format_citations,
+    reconcile_recommendation,
+    validate_resolution,
+)
 from ar_reconciliation.agent.rules_backend import rules_backend_analyse
 from ar_reconciliation.agent.validator import max_appliable_cents, validate_recommendation
 from ar_reconciliation.config import (
+    EVIDENCE_DIR,
     RESULT_FILE,
     REVIEW_LOG_SHEET,
     REVIEW_SHEET,
@@ -111,6 +120,19 @@ from ar_reconciliation.core.schema import (
     REVIEW_RECOMMENDED_ACTION_COL,
     REVIEW_REVIEWER_NOTES_COL,
     REVIEW_ROOT_CAUSE_COL,
+    REVIEW_ADJUSTMENTS_COL,
+    REVIEW_ALLOCATIONS_COL,
+    REVIEW_CITATIONS_COL,
+    REVIEW_CONFLICTS_COL,
+    REVIEW_DECISION_TS_COL,
+    REVIEW_DOCUMENTS_COL,
+    REVIEW_EVIDENCE_COL,
+    REVIEW_RESOLUTION_ID_COL,
+    REVIEW_REVIEWER_COL,
+    REVIEW_SUFFICIENCY_COL,
+    REVIEW_VALIDATION_COL,
+    REVIEW_VALIDATION_NOTES_COL,
+    BANK_CURRENCY_COL,
 )
 from ar_reconciliation.llm.backend import LLMBackend
 from ar_reconciliation.services.controls import compute_output_controls
@@ -124,10 +146,28 @@ from ar_reconciliation.rules.policies import (
 # Approval / write-back
 # ---------------------------------------------------------------------------
 
+def _decision(value: object) -> str:
+    """The reviewer's decision in canonical form (APPROVE, REJECT, MORE_EVIDENCE)."""
+    text = "_".join(normalize_text(value).upper().replace("-", " ").split())
+    if text in {"REQUEST_MORE_EVIDENCE", "MORE_EVIDENCE", "NEEDS_MORE_EVIDENCE"}:
+        return "MORE_EVIDENCE"
+    return text
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
 def apply_approved_recommendations(
     result_df: pd.DataFrame,
     ar_df: pd.DataFrame,
     review_df: pd.DataFrame,
+    evidence_store: Any | None = None,
+    reviewer: str = "",
+    records: list[dict[str, Any]] | None = None,
+    audit: list[dict[str, Any]] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[dict[str, Any]]]:
     """
     Apply the recommendations a human approved in the review sheet.
@@ -151,18 +191,68 @@ def apply_approved_recommendations(
     the log; nothing is partially posted.  An amount above the invoices'
     remaining balance is capped at that balance and logged as "Adjusted".
 
+    A row with Proposed Allocations is an evidence-based resolution and is
+    applied by :func:`_apply_resolution`: every allocation and adjustment is
+    validated again against the current AR and the supporting documents, and
+    the Resolution ID guarantees it is applied only once.
+
+    REJECT and MORE_EVIDENCE decisions change nothing; they are recorded, and
+    the receipt stays in review.  ``records`` receives one approval record
+    per decided row and ``audit`` one entry per balance change, when given.
+
     Returns the updated AR frame, the updated result frame and an audit log.
     """
     ar = ar_df.copy()
     result = result_df.copy()
+    # A column that was blank on every row comes back from Excel as float
+    # NaN, which cannot take the text written below (a transaction ID, a
+    # note, a status).  Such columns are made plain object columns first.
+    for frame in (ar, result):
+        for column in frame.columns:
+            if frame[column].isna().all():
+                frame[column] = frame[column].astype(object)
     log: list[dict[str, Any]] = []
+    records = records if records is not None else []
+    audit = audit if audit is not None else []
 
     def record(txn_id: str, outcome: str, detail: str) -> None:
         log.append({"Bank Transaction ID": txn_id, "Outcome": outcome, "Detail": detail})
 
-    approved = review_df.loc[
-        review_df[REVIEW_APPROVAL_COL].fillna("").astype(str).str.strip().str.upper() == "APPROVE"
-    ]
+    decisions = review_df[REVIEW_APPROVAL_COL].apply(_decision)
+
+    def approval_record(row: pd.Series, decision: str, outcome: str, detail: str) -> None:
+        records.append({
+            "Bank Transaction ID": normalize_text(row.get(REVIEW_BANK_TXN_COL, "")),
+            "Resolution ID": normalize_text(row.get(REVIEW_RESOLUTION_ID_COL, "")),
+            "Decision": decision,
+            "Reviewer": normalize_text(row.get(REVIEW_REVIEWER_COL, "")) or normalize_text(reviewer),
+            "Decision Timestamp": normalize_text(row.get(REVIEW_DECISION_TS_COL, "")) or _now_iso(),
+            "Reviewer Notes": normalize_text(row.get(REVIEW_REVIEWER_NOTES_COL, "")),
+            "Approved Allocations": normalize_text(row.get(REVIEW_ALLOCATIONS_COL, ""))
+            or (
+                f"{normalize_text(row.get(REVIEW_PROPOSED_INVOICES_COL, ''))}: "
+                f"{normalize_text(row.get(REVIEW_PROPOSED_AMOUNT_COL, ''))}"
+            ),
+            "Approved Adjustments": normalize_text(row.get(REVIEW_ADJUSTMENTS_COL, "")),
+            "Outcome": outcome,
+            "Detail": detail,
+            "Processed At": _now_iso(),
+        })
+
+    for index, row in review_df.loc[decisions.isin({"REJECT", "MORE_EVIDENCE"})].iterrows():
+        # These decisions change nothing, so they are not part of the apply
+        # log; they are kept as approval records.
+        if decisions[index] == "REJECT":
+            detail = "Rejected by the reviewer; nothing was applied and the receipt stays in review."
+            approval_record(row, "REJECT", "Not applied", detail)
+        else:
+            detail = (
+                "The reviewer requested more evidence; nothing was applied and the receipt "
+                "stays in review."
+            )
+            approval_record(row, "MORE_EVIDENCE", "More evidence requested", detail)
+
+    approved = review_df.loc[decisions == "APPROVE"]
 
     if approved.empty:
         return ar, result, log
@@ -187,6 +277,23 @@ def apply_approved_recommendations(
     for _, row in approved.iterrows():
         txn_id = normalize_text(row.get(REVIEW_BANK_TXN_COL, ""))
         txn_key = normalize_key(txn_id)
+
+        if normalize_text(row.get(REVIEW_ALLOCATIONS_COL, "")):
+            log_start = len(log)
+            _apply_resolution(
+                row, txn_id, txn_key, ar, result, result_txn_key, already_applied_txns,
+                evidence_store, record, audit, reviewer,
+            )
+            entries = log[log_start:]
+            outcome = entries[-1]["Outcome"] if entries else "Rejected"
+            approval_record(
+                row, "APPROVE",
+                "Applied" if outcome == "Applied" else ("Already applied" if outcome == "Skipped" else "Rejected"),
+                entries[-1]["Detail"] if entries else "",
+            )
+            continue
+
+        log_start = len(log)
         invoices = [
             v.strip()
             for v in normalize_text(row.get(REVIEW_PROPOSED_INVOICES_COL, "")).split(",")
@@ -342,12 +449,317 @@ def apply_approved_recommendations(
         result.at[r_idx, "Match Method"] = "AI Approved Match"
         already_applied_txns.add(txn_key)
 
+    # Approval records for the single-amount (legacy) rows, from their log.
+    resolution_txns = {
+        normalize_key(r["Bank Transaction ID"]) for r in records if r["Decision"] == "APPROVE"
+    }
+    for _, row in approved.iterrows():
+        key = normalize_key(row.get(REVIEW_BANK_TXN_COL, ""))
+        if key in resolution_txns:
+            continue
+        entries = [e for e in log if normalize_key(e["Bank Transaction ID"]) == key]
+        last = entries[-1] if entries else {"Outcome": "Rejected", "Detail": ""}
+        outcome = {"Applied": "Applied", "Adjusted": "Applied", "Skipped": "Already applied"}.get(
+            last["Outcome"], "Rejected"
+        )
+        approval_record(row, "APPROVE", outcome, last["Detail"])
+
     return ar, result, log
+
+
+def _apply_resolution(
+    row: pd.Series,
+    txn_id: str,
+    txn_key: str,
+    ar: pd.DataFrame,
+    result: pd.DataFrame,
+    result_txn_key: pd.Series,
+    already_applied_txns: set[str],
+    evidence_store: Any | None,
+    record: Any,
+    audit: list[dict[str, Any]],
+    reviewer: str,
+) -> None:
+    """
+    Apply one approved evidence-based resolution, or reject it with a reason.
+
+    Nothing is written unless every allocation and adjustment passes
+    :func:`validate_resolution` against the AR as it stands now.  The
+    Resolution ID is recorded on the receipt, so a second attempt is skipped.
+    """
+    from ar_reconciliation.agent.resolution import (
+        parse_adjustments,
+        parse_allocations,
+        resolution_id,
+    )
+    from ar_reconciliation.core.schema import (
+        BANK_SUPPORTING_DOCS_COL,
+        OUT_AI_APPLIED_AMOUNT_COL,
+        OUT_APPROVED_ADJUSTMENT_COL,
+        OUT_APPROVED_ADJUSTMENT_TYPE_COL,
+        OUT_RESOLUTION_ID_COL,
+    )
+
+    for frame, columns in (
+        (ar, (OUT_AI_APPLIED_AMOUNT_COL, OUT_APPROVED_ADJUSTMENT_COL,
+              OUT_APPROVED_ADJUSTMENT_TYPE_COL, OUT_RESOLUTION_ID_COL)),
+        (result, (OUT_AI_APPLIED_AMOUNT_COL, OUT_RESOLUTION_ID_COL, BANK_SUPPORTING_DOCS_COL)),
+    ):
+        for column in columns:
+            if column not in frame.columns:
+                frame[column] = pd.Series([""] * len(frame), index=frame.index, dtype=object)
+            else:
+                frame[column] = frame[column].astype(object).where(frame[column].notna(), "")
+
+    result_positions = result.index[result_txn_key == txn_key]
+    if len(result_positions) != 1:
+        record(txn_id, "Rejected",
+               "The receipt is missing from, or repeated in, the processed bank receipts sheet.")
+        return
+    r_idx = result_positions[0]
+
+    if txn_key in already_applied_txns or normalize_text(result.at[r_idx, OUT_RESOLUTION_ID_COL]):
+        record(txn_id, "Skipped",
+               f"Resolution {normalize_text(result.at[r_idx, OUT_RESOLUTION_ID_COL]) or ''} was "
+               f"already applied to this receipt; it was not applied again.".replace("  ", " "))
+        return
+
+    try:
+        allocations = parse_allocations(row.get(REVIEW_ALLOCATIONS_COL, ""))
+        adjustments = parse_adjustments(row.get(REVIEW_ADJUSTMENTS_COL, ""))
+    except ValueError as exc:
+        record(txn_id, "Rejected", f"The approved resolution cannot be read: {exc}.")
+        return
+
+    bank_row = result.loc[r_idx]
+    evidence = None
+    if evidence_store is not None:
+        from ar_reconciliation.evidence.service import evidence_for_receipt
+
+        evidence = evidence_for_receipt(
+            evidence_store, txn_id, normalize_text(bank_row.get(BANK_CURRENCY_COL, ""))
+        )
+        if not evidence.has_documents:
+            evidence = None
+    context = build_context(bank_row, bank_row, ar, set(), evidence=evidence)
+
+    checked = validate_resolution(
+        {
+            "proposed_allocations": allocations,
+            "proposed_adjustments": adjustments,
+            "evidence_sufficiency": "Sufficient",
+        },
+        context,
+        require_citations=False,
+    )
+    if not checked.applicable:
+        record(txn_id, "Rejected",
+               "The approved resolution failed revalidation: " + " ".join(checked.notes))
+        return
+    if len(checked.adjustments) != len(adjustments):
+        record(txn_id, "Rejected",
+               "An approved adjustment is no longer supported by the documents: "
+               + " ".join(checked.notes))
+        return
+
+    new_id = resolution_id(txn_id, checked.allocations, checked.adjustments)
+    approved_id = normalize_text(row.get(REVIEW_RESOLUTION_ID_COL, ""))
+    edited = bool(approved_id) and approved_id != new_id
+
+    # --- Resolve each invoice to exactly one AR row -------------------------
+    pool = {c.invoice_number.upper(): c for c in context.candidates}
+    ar_invoice_key = ar[AR_INVOICE_COL].apply(normalize_key)
+    ar_customer_key = ar[AR_CUSTOMER_ID_COL].apply(normalize_key)
+    ar_currency = ar[AR_CURRENCY_COL].apply(lambda v: normalize_text(v).upper())
+    targets: dict[str, int] = {}
+    for allocation in checked.allocations:
+        candidate = pool[allocation.invoice]
+        matches = ar.index[
+            (ar_invoice_key == normalize_key(allocation.invoice))
+            & (ar_customer_key == normalize_key(candidate.customer_id))
+            & (ar_currency == candidate.currency.upper())
+        ]
+        if len(matches) != 1:
+            record(txn_id, "Rejected",
+                   f"{allocation.invoice} does not resolve to exactly one AR row.")
+            return
+        targets[allocation.invoice] = int(matches[0])
+
+    adjustment_by_invoice: dict[str, list[Any]] = {}
+    for adjustment in checked.adjustments:
+        adjustment_by_invoice.setdefault(adjustment.invoice, []).append(adjustment)
+
+    timestamp = _now_iso()
+    documents = ", ".join(d.split(" ")[0] for d in context.documents)
+
+    # --- AR -----------------------------------------------------------------
+    for allocation in checked.allocations:
+        idx = targets[allocation.invoice]
+        original_open = money_to_cents(ar.at[idx, AR_OPEN_AMOUNT_COL])
+        applied_before = money_to_cents(ar.at[idx, AR_APPLIED_AMOUNT_COL])
+        adjusted_before = money_to_cents(ar.at[idx, OUT_APPROVED_ADJUSTMENT_COL])
+        remaining_before = max(original_open - applied_before - adjusted_before, 0)
+        adjustment_cents = sum(a.amount_cents for a in adjustment_by_invoice.get(allocation.invoice, []))
+        applied_after = applied_before + allocation.amount_cents
+        adjusted_after = adjusted_before + adjustment_cents
+        remaining_after = max(original_open - applied_after - adjusted_after, 0)
+
+        ar.at[idx, AR_APPLIED_AMOUNT_COL] = cents_to_money(applied_after)
+        ar.at[idx, OUT_AI_APPLIED_AMOUNT_COL] = cents_to_money(
+            money_to_cents(ar.at[idx, OUT_AI_APPLIED_AMOUNT_COL]) + allocation.amount_cents
+        )
+        if adjustment_cents:
+            ar.at[idx, OUT_APPROVED_ADJUSTMENT_COL] = cents_to_money(adjusted_after)
+            types = [normalize_text(ar.at[idx, OUT_APPROVED_ADJUSTMENT_TYPE_COL])] + [
+                a.type for a in adjustment_by_invoice[allocation.invoice]
+            ]
+            ar.at[idx, OUT_APPROVED_ADJUSTMENT_TYPE_COL] = ", ".join(dict.fromkeys(t for t in types if t))
+        ar.at[idx, AR_RESIDUAL_AMOUNT_COL] = cents_to_money(remaining_after)
+        previous_ids = normalize_text(ar.at[idx, OUT_RESOLUTION_ID_COL])
+        ar.at[idx, OUT_RESOLUTION_ID_COL] = f"{previous_ids}, {new_id}" if previous_ids else new_id
+        previous_txns = normalize_text(ar.at[idx, AR_MATCHED_TXN_COL])
+        ar.at[idx, AR_MATCHED_TXN_COL] = f"{previous_txns}, {txn_id}" if previous_txns else txn_id
+        note = (
+            f"AI-approved resolution {new_id}: receipt {txn_id} applied "
+            f"{format_money(allocation.amount_cents)}"
+            + (f" and an approved adjustment of {format_money(adjustment_cents)}" if adjustment_cents else "")
+            + (f" (third-party payment)" if candidate_is_third_party(pool, allocation.invoice) else "")
+            + "."
+        )
+        notes = normalize_text(ar.at[idx, "Reconciliation Notes"])
+        ar.at[idx, "Reconciliation Notes"] = f"{notes} {note}".strip()
+        ar.at[idx, "Suggested Recon Status"] = "Reconciled" if remaining_after == 0 else "Pending Review"
+
+        audit.append({
+            "Timestamp": timestamp,
+            "Event": "Resolution applied",
+            "Bank Transaction ID": txn_id,
+            "Resolution ID": new_id,
+            "Invoice Number": allocation.invoice,
+            "Customer ID": pool[allocation.invoice].customer_id,
+            "Open Before": cents_to_money(remaining_before),
+            "Cash Applied": cents_to_money(allocation.amount_cents),
+            "Adjustment Amount": cents_to_money(adjustment_cents),
+            "Adjustment Type": ", ".join(a.type for a in adjustment_by_invoice.get(allocation.invoice, [])),
+            "Open After": cents_to_money(remaining_after),
+            "Supporting Documents": documents,
+            "Reviewer": normalize_text(row.get(REVIEW_REVIEWER_COL, "")) or normalize_text(reviewer),
+            "Detail": "Third-party payment" if pool[allocation.invoice].third_party else "",
+        })
+
+    # --- Bank receipt ---------------------------------------------------------
+    gross = context.gross_amount_cents
+    applied = checked.cash_cents
+    fee = min(max(context.bank_fee_cents, 0), gross - applied)
+    unapplied = gross - applied - fee
+    result.at[r_idx, BANK_APPLIED_AMOUNT_TOTAL_COL] = cents_to_money(applied)
+    result.at[r_idx, BANK_ADJUSTMENT_AMOUNT_COL] = cents_to_money(fee)
+    result.at[r_idx, BANK_UNAPPLIED_AMOUNT_COL] = cents_to_money(unapplied)
+    result.at[r_idx, BANK_HELD_AMOUNT_COL] = cents_to_money(0)
+    result.at[r_idx, OUT_AI_APPLIED_AMOUNT_COL] = cents_to_money(applied)
+    result.at[r_idx, OUT_RESOLUTION_ID_COL] = new_id
+    result.at[r_idx, BANK_SUPPORTING_DOCS_COL] = documents
+    result.at[r_idx, "Suggested Bank Status"] = "Reconciled" if unapplied == 0 else "Pending Review"
+    result.at[r_idx, "Match Method"] = "AI Approved Resolution"
+    existing_notes = normalize_text(result.at[r_idx, "Processing Notes"])
+    result.at[r_idx, "Processing Notes"] = (
+        f"{existing_notes} AI-approved resolution {new_id}: "
+        f"{format_allocations(checked.allocations)}"
+        + (f"; adjustments {format_adjustments(checked.adjustments)}" if checked.adjustments else "")
+        + (f"; {format_money(unapplied)} unapplied on account" if unapplied else "")
+        + "."
+    ).strip()
+    already_applied_txns.add(txn_key)
+
+    if unapplied:
+        audit.append({
+            "Timestamp": timestamp,
+            "Event": "Unapplied cash held on account",
+            "Bank Transaction ID": txn_id,
+            "Resolution ID": new_id,
+            "Invoice Number": "",
+            "Customer ID": normalize_text(bank_row.get("ERP Customer ID", "")),
+            "Open Before": "",
+            "Cash Applied": "",
+            "Adjustment Amount": "",
+            "Adjustment Type": "",
+            "Open After": "",
+            "Supporting Documents": documents,
+            "Reviewer": normalize_text(row.get(REVIEW_REVIEWER_COL, "")) or normalize_text(reviewer),
+            "Detail": f"{format_money(unapplied)} of the receipt is not applied to AR.",
+        })
+
+    record(
+        txn_id,
+        "Applied",
+        f"Applied resolution {new_id}: {format_allocations(checked.allocations)}"
+        + (f"; adjustments {format_adjustments(checked.adjustments)}" if checked.adjustments else "")
+        + (f"; {format_money(unapplied)} left unapplied" if unapplied else "")
+        + (" (edited by the reviewer and revalidated)" if edited else "")
+        + ".",
+    )
+
+
+def candidate_is_third_party(pool: dict[str, Candidate], invoice: str) -> bool:
+    candidate = pool.get(invoice.upper())
+    return bool(candidate and candidate.third_party)
 
 
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
+
+def _evidence_summary(context: ExceptionContext) -> str:
+    """One readable line per fact, for the reviewer."""
+    lines: list[str] = []
+    for fact in context.evidence[:25]:
+        amount = (
+            f" {format_money(fact.amount_cents)}{' ' + fact.currency if fact.currency else ''}"
+            if fact.amount_cents is not None
+            else ""
+        )
+        invoice = f" ({fact.invoice})" if fact.invoice and fact.invoice != fact.value else ""
+        lines.append(f"{fact.field}: {fact.value}{invoice}{amount} [{fact.doc_id} {fact.location}]")
+    if len(context.evidence) > 25:
+        lines.append(f"... {len(context.evidence) - 25} more facts on the Extracted Evidence sheet")
+    return "\n".join(lines)
+
+
+def _evidence_columns(context: ExceptionContext, resolution: Resolution) -> dict[str, Any]:
+    """The supporting-document columns of one review row (blank without documents)."""
+    documents = list(context.documents)
+    if not documents:
+        return {
+            REVIEW_DOCUMENTS_COL: "",
+            REVIEW_EVIDENCE_COL: "",
+            REVIEW_CITATIONS_COL: "",
+            REVIEW_CONFLICTS_COL: "",
+            REVIEW_SUFFICIENCY_COL: "",
+            REVIEW_ALLOCATIONS_COL: "",
+            REVIEW_ADJUSTMENTS_COL: "",
+            REVIEW_VALIDATION_COL: "",
+            REVIEW_VALIDATION_NOTES_COL: "",
+            REVIEW_RESOLUTION_ID_COL: "",
+            REVIEW_REVIEWER_COL: "",
+            REVIEW_DECISION_TS_COL: "",
+        }
+    return {
+        REVIEW_DOCUMENTS_COL: "\n".join(documents),
+        REVIEW_EVIDENCE_COL: _evidence_summary(context),
+        REVIEW_CITATIONS_COL: format_citations(resolution.citations),
+        REVIEW_CONFLICTS_COL: "\n".join(resolution.conflicts),
+        REVIEW_SUFFICIENCY_COL: resolution.sufficiency,
+        REVIEW_ALLOCATIONS_COL: format_allocations(resolution.allocations)
+        if resolution.applicable else "",
+        REVIEW_ADJUSTMENTS_COL: format_adjustments(resolution.adjustments)
+        if resolution.applicable else "",
+        REVIEW_VALIDATION_COL: resolution.status,
+        REVIEW_VALIDATION_NOTES_COL: "\n".join(resolution.notes),
+        REVIEW_RESOLUTION_ID_COL: resolution.resolution_id if resolution.applicable else "",
+        REVIEW_REVIEWER_COL: "",
+        REVIEW_DECISION_TS_COL: "",
+    }
+
 
 def analyse_exceptions(
     result_path: Path = RESULT_FILE,
@@ -361,6 +773,10 @@ def analyse_exceptions(
     num_ctx: int | None = None,
     num_thread: int | None = None,
     keep_alive: str | int | None = None,
+    evidence_store: Any | None = None,
+    llm_extract: bool = False,
+    evidence_rows: list[dict[str, Any]] | None = None,
+    backend_override: Any | None = None,
 ) -> tuple[
     pd.DataFrame,
     pd.DataFrame,
@@ -372,6 +788,15 @@ def analyse_exceptions(
     """
     Analyse every unmatched receipt and return the review, log and context
     frames together with the updated AR and processed-receipt frames.
+
+    ``evidence_store`` is the :class:`~ar_reconciliation.evidence.DocumentStore`
+    holding the supporting documents.  Receipts with linked documents are
+    analysed from their evidence; every other receipt is analysed exactly as
+    before.  ``llm_extract`` adds the LLM fact extractor (LLM backend only;
+    off by default, decision E3).  ``evidence_rows``, when given, receives one
+    row per extracted fact for the Extracted Evidence sheet.
+    ``backend_override`` replaces the LLM backend (used by tests to supply a
+    mocked model).
     """
     if not result_path.exists():
         raise FileNotFoundError(
@@ -406,6 +831,15 @@ def analyse_exceptions(
         engine_label = f"LLM ({model})"
     else:
         engine_label = "Rules (deterministic)"
+    if backend_override is not None:
+        backend = backend_override
+        engine_label = f"LLM ({getattr(backend_override, 'model', 'custom')})"
+
+    llm_extractor = None
+    if llm_extract and backend is not None and evidence_store is not None:
+        from ar_reconciliation.evidence.extraction import LLMExtractor
+
+        llm_extractor = LLMExtractor(backend)
 
     bank_lookup = {
         normalize_key(row.get(BANK_TRANSACTION_ID_COL, "")): row
@@ -439,7 +873,30 @@ def analyse_exceptions(
             })
             return None, local_log
 
-        context = build_context(bank_row, unmatched_row, ar_df, already_matched)
+        evidence = None
+        if evidence_store is not None:
+            from ar_reconciliation.evidence.service import evidence_for_receipt
+
+            evidence = evidence_for_receipt(
+                evidence_store,
+                txn_id,
+                normalize_text(bank_row.get(BANK_CURRENCY_COL, "")),
+                llm_extractor,
+            )
+            for note in evidence.notes:
+                local_log.append({"Bank Transaction ID": txn_id, "Outcome": "Evidence", "Detail": note})
+            for unreadable in evidence.unreadable:
+                local_log.append({
+                    "Bank Transaction ID": txn_id,
+                    "Outcome": "Evidence",
+                    "Detail": f"Document could not be read: {unreadable}",
+                })
+            if not evidence.has_documents:
+                evidence = None
+
+        context = build_context(
+            bank_row, unmatched_row, ar_df, already_matched, evidence=evidence
+        )
 
         if backend is not None:
             try:
@@ -459,6 +916,8 @@ def analyse_exceptions(
 
         recommendation = validate_recommendation(raw, context)
         recommendation.analysed_by = source
+        resolution = validate_resolution(raw, context)
+        reconcile_recommendation(recommendation, resolution, context)
 
         for note in recommendation.validation_notes:
             local_log.append({
@@ -485,6 +944,21 @@ def analyse_exceptions(
             REVIEW_REVIEWER_NOTES_COL: "",
             REVIEW_APPLIED_COL: "No",
         }
+        review_row.update(_evidence_columns(context, resolution))
+        if evidence_rows is not None and context.evidence:
+            for fact in context.evidence:
+                evidence_rows.append({
+                    "Bank Transaction ID": txn_id,
+                    "Document ID": fact.doc_id,
+                    "Field": fact.field,
+                    "Value": fact.value,
+                    "Invoice": fact.invoice,
+                    "Amount": cents_to_money(fact.amount_cents) if fact.amount_cents is not None else "",
+                    "Currency": fact.currency,
+                    "Location": fact.location,
+                    "Quote": fact.quote,
+                    "Extracted By": "LLM (verified)" if fact.method == "llm" else "Rules",
+                })
         return review_row, local_log
 
     # --- Run the analysis, optionally in parallel ---
@@ -535,10 +1009,19 @@ def analyse_exceptions(
                 == normalize_text(row[REVIEW_PROPOSED_INVOICES_COL]).upper()
                 and money_to_cents(previous.get("amount"))
                 == money_to_cents(row[REVIEW_PROPOSED_AMOUNT_COL])
+                and normalize_text(previous.get("allocations")).upper()
+                == normalize_text(row.get(REVIEW_ALLOCATIONS_COL, "")).upper()
+                and normalize_text(previous.get("adjustments")).upper()
+                == normalize_text(row.get(REVIEW_ADJUSTMENTS_COL, "")).upper()
             )
             if same_proposal and normalize_text(previous.get("approval")):
                 review_df.at[index, REVIEW_APPROVAL_COL] = previous["approval"]
                 review_df.at[index, REVIEW_REVIEWER_NOTES_COL] = previous.get("notes", "")
+                if REVIEW_REVIEWER_COL in review_df.columns:
+                    review_df.at[index, REVIEW_REVIEWER_COL] = previous.get("reviewer", "")
+                    review_df.at[index, REVIEW_DECISION_TS_COL] = previous.get("decided_at", "")
+                if previous.get("applied") == "Yes":
+                    review_df.at[index, REVIEW_APPLIED_COL] = "Yes"
 
     return ar_df, result_df, review_df, log_df, unmatched_df, backend
 
@@ -574,6 +1057,11 @@ def read_existing_approvals(result_path: Path) -> dict[str, dict[str, Any]]:
             "notes": normalize_text(row.get(REVIEW_REVIEWER_NOTES_COL, "")),
             "invoices": normalize_text(row.get(REVIEW_PROPOSED_INVOICES_COL, "")),
             "amount": row.get(REVIEW_PROPOSED_AMOUNT_COL, 0),
+            "allocations": normalize_text(row.get(REVIEW_ALLOCATIONS_COL, "")),
+            "adjustments": normalize_text(row.get(REVIEW_ADJUSTMENTS_COL, "")),
+            "reviewer": normalize_text(row.get(REVIEW_REVIEWER_COL, "")),
+            "decided_at": normalize_text(row.get(REVIEW_DECISION_TS_COL, "")),
+            "applied": normalize_text(row.get(REVIEW_APPLIED_COL, "")),
         }
 
     return approvals
@@ -723,6 +1211,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Apply the recommendations approved in the review sheet (Approval = APPROVE) "
         "back to AR, then re-run the control totals.",
     )
+    parser.add_argument(
+        "--evidence-dir",
+        type=Path,
+        default=EVIDENCE_DIR if EVIDENCE_DIR.exists() else None,
+        help="Supporting-document store (see ar-evidence). Receipts with linked documents "
+        "are analysed from their evidence (default: data/evidence when it exists)",
+    )
+    parser.add_argument(
+        "--llm-extract",
+        action="store_true",
+        help="Also extract document facts with the LLM (LLM backend only). Off by default: "
+        "only masked facts and short quotes are otherwise sent to the model.",
+    )
+    parser.add_argument(
+        "--reviewer",
+        default=os.environ.get("AR_REVIEWER", ""),
+        help="Name recorded in the approval records and audit trail for decisions that "
+        "do not carry a reviewer name in the sheet.",
+    )
     return parser
 
 
@@ -737,9 +1244,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     print("AI Exception Resolution Agent")
     print("=" * 72)
 
-    ar_df, result_df, review_df, log_df, unmatched_df, backend = analyse_exceptions(
-        result_path=args.result,
+    from ar_reconciliation.agent.workflow import apply_decisions, run_analysis
+
+    analysis = run_analysis(
+        args.result,
         backend_name=args.backend,
+        evidence_dir=args.evidence_dir,
+        llm_extract=args.llm_extract,
         model=args.model,
         base_url=args.base_url,
         api_key=args.api_key,
@@ -750,6 +1261,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         num_thread=args.num_thread,
         keep_alive=args.keep_alive,
     )
+    review_df, backend = analysis.review_df, analysis.backend
 
     if review_df.empty:
         print("No unmatched receipts to analyse.")
@@ -784,7 +1296,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"= {total_tokens} total"
             )
 
-    write_review_sheet(args.result, review_df, log_df)
+    if not analysis.evidence_df.empty:
+        resolved = int((review_df[REVIEW_VALIDATION_COL] == "Valid").sum() + (review_df[REVIEW_VALIDATION_COL] == "Downgraded").sum())
+        print(
+            f"\nSupporting documents: {len(analysis.documents_df)} stored; "
+            f"{analysis.evidence_df['Bank Transaction ID'].nunique()} receipts with evidence; "
+            f"{resolved} evidence-based resolutions ready for review."
+        )
     print(f"\nWrote '{REVIEW_SHEET}' and '{REVIEW_LOG_SHEET}' to {args.result.name}")
 
     if not args.apply_approved:
@@ -794,62 +1312,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
 
-    # --- Apply the human approvals ---
+    # --- Apply the human decisions ---
     print("\nApplying approved recommendations...")
-    # Re-read the review sheet so the human edits made in Excel are honoured.
-    approved_review = pd.read_excel(args.result, sheet_name=REVIEW_SHEET)
-    ar_updated, result_updated, apply_log = apply_approved_recommendations(
-        result_df=result_df, ar_df=ar_df, review_df=approved_review
-    )
+    # The review sheet is read again, so decisions made in Excel or the review
+    # UI are honoured.
+    outcome = apply_decisions(args.result, evidence_dir=args.evidence_dir, reviewer=args.reviewer)
+    controls = outcome.controls
 
-    if apply_log:
-        log_df = pd.concat([log_df, pd.DataFrame(apply_log)], ignore_index=True)
-
-    # --- Re-run the controls on the updated data ---
-    controls = compute_output_controls(ar_updated, result_updated)
-
-    applied_txns = {
-        normalize_key(entry["Bank Transaction ID"])
-        for entry in apply_log
-        if entry["Outcome"] in {"Applied", "Adjusted"}
-    }
-    applied_count = len(applied_txns)
-    rejected_count = sum(1 for entry in apply_log if entry["Outcome"] == "Rejected")
-    print(f"Approved recommendations applied : {applied_count}")
-    print(f"Approved recommendations rejected: {rejected_count}")
+    print(f"Approved recommendations applied : {outcome.applied_count}")
+    print(f"Approved recommendations rejected: {outcome.rejected_count}")
     print(f"AR applied amount total           : {format_money(controls.ar_applied_cents)}")
     print(f"Bank applied amount total         : {format_money(controls.applied_cents)}")
     print(f"Cash control difference           : {format_money(controls.cash_difference_cents)}")
     print(f"AR roll-forward difference        : {format_money(controls.rollforward_difference_cents)}")
+    print(f"Run status                        : {outcome.run_status}")
 
-    if not controls.balanced:
+    if outcome.failed_path is not None:
         print(
             "\nERROR: the controls do not balance after applying the approvals. "
             "The result workbook was NOT updated.\n  " + controls.describe_breaks()
+            + f"\n  Diagnostics: {outcome.failed_path.name}"
         )
         return 1
-
-    if REVIEW_APPLIED_COL in review_df.columns:
-        review_df[REVIEW_APPLIED_COL] = review_df[REVIEW_APPLIED_COL].astype(object)
-        applied_mask = review_df[REVIEW_BANK_TXN_COL].apply(normalize_key).isin(applied_txns)
-        review_df.loc[applied_mask, REVIEW_APPLIED_COL] = "Yes"
-
-    summary_df = refresh_summary(
-        pd.read_excel(args.result, sheet_name="Summary"), controls, applied_count
-    )
-
-    with pd.ExcelWriter(args.result, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
-        ar_updated.to_excel(writer, index=False, sheet_name="Reconciled Open AR")
-        result_updated.to_excel(writer, index=False, sheet_name="Processed Bank Receipts")
-        summary_df.to_excel(writer, index=False, sheet_name="Summary")
-        review_df.to_excel(writer, index=False, sheet_name=REVIEW_SHEET)
-        log_df.to_excel(writer, index=False, sheet_name=REVIEW_LOG_SHEET)
-
-    # Replacing a sheet drops its styling, so the report formatting is
-    # applied again over the whole workbook.
-    from ar_reconciliation.io.workbook import apply_workbook_formatting
-
-    apply_workbook_formatting(args.result)
 
     print(f"\nUpdated {args.result.name} with the approved applications.")
     return 0

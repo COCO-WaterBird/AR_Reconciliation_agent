@@ -32,7 +32,16 @@ __all__ = [
 #: The sheets the AI exception agent owns.  The reconciliation engine
 #: rewrites its output workbook from scratch, so these have to be carried
 #: over or a reviewer's approval is destroyed.
-REVIEW_SHEETS = ("AI Exception Review", "AI Exception Log")
+REVIEW_SHEETS = (
+    "AI Exception Review",
+    "AI Exception Log",
+    # The evidence and the audit records are carried over too: the audit
+    # trail is append-only and must survive a re-run of the engine.
+    "Supporting Documents",
+    "Extracted Evidence",
+    "Approval Records",
+    "Audit Trail",
+)
 
 
 def require_columns(df: pd.DataFrame, required: list[str], file_label: str) -> None:
@@ -152,7 +161,10 @@ _DATE_TOKENS = ("date", "posted", "due")
 #: Columns that hold a share or rate.
 _PERCENT_TOKENS = ("percent", "percentage", "rate", "ratio")
 #: Free-text columns that should wrap rather than run off the page.
-_TEXT_TOKENS = ("memo", "reason", "note", "explanation", "treatment", "detail")
+_TEXT_TOKENS = (
+    "memo", "reason", "note", "explanation", "treatment", "detail",
+    "quote", "citation", "summary", "conflict", "allocation", "adjustments",
+)
 
 
 def _has_token(name: str, tokens: tuple[str, ...]) -> bool:
@@ -216,13 +228,16 @@ def _status_fill(value: object) -> str | None:
     text = str(value).strip().lower()
     if not text:
         return None
-    if text in {"reconciled", "applied", "matched"}:
+    if text in {"reconciled", "applied", "matched", "valid", "final"}:
         return STATUS_FILLS["green"]
-    if text in {"unmatched", "unapplied"}:
+    if text in {"unmatched", "unapplied", "rejected", "failed"}:
         return STATUS_FILLS["red"]
-    if text in {"pending review", "recommend match", "suggested"}:
+    if text in {"pending review", "recommend match", "suggested", "downgraded"}:
         return STATUS_FILLS["yellow"]
-    if text in {"exception", "hold / escalate", "manual review", "return to customer"}:
+    if text in {
+        "exception", "hold / escalate", "manual review", "return to customer",
+        "needs review", "more evidence requested",
+    }:
         return STATUS_FILLS["orange"]
     return None
 
@@ -263,6 +278,11 @@ def apply_workbook_formatting(output_file: Path) -> None:
         "Summary": 1,
         "AI Exception Review": 2,
         "AI Exception Log": 2,
+        "Supporting Documents": 2,
+        "Extracted Evidence": 2,
+        "Approval Records": 2,
+        "Audit Trail": 2,
+        "Control Breaks": 1,
     }
 
     header_fill = PatternFill(start_color=NAVY, end_color=NAVY, fill_type="solid")

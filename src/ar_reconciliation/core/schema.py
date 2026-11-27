@@ -77,6 +77,30 @@ __all__ = [
     "REVIEW_APPROVAL_COL",
     "REVIEW_REVIEWER_NOTES_COL",
     "REVIEW_APPLIED_COL",
+    "REVIEW_DOCUMENTS_COL",
+    "REVIEW_EVIDENCE_COL",
+    "REVIEW_CITATIONS_COL",
+    "REVIEW_CONFLICTS_COL",
+    "REVIEW_SUFFICIENCY_COL",
+    "REVIEW_ALLOCATIONS_COL",
+    "REVIEW_ADJUSTMENTS_COL",
+    "REVIEW_VALIDATION_COL",
+    "REVIEW_VALIDATION_NOTES_COL",
+    "REVIEW_RESOLUTION_ID_COL",
+    "REVIEW_REVIEWER_COL",
+    "REVIEW_DECISION_TS_COL",
+    "REVIEW_DECISIONS",
+    # Evidence-based resolution columns on the output sheets
+    "OUT_AI_APPLIED_AMOUNT_COL",
+    "OUT_APPROVED_ADJUSTMENT_COL",
+    "OUT_APPROVED_ADJUSTMENT_TYPE_COL",
+    "OUT_RESOLUTION_ID_COL",
+    "BANK_SUPPORTING_DOCS_COL",
+    # Evidence and audit sheets
+    "DOCUMENTS_SHEET",
+    "EVIDENCE_SHEET",
+    "APPROVAL_RECORDS_SHEET",
+    "AUDIT_TRAIL_SHEET",
     # Unmatched sheet columns
     "UNMATCHED_REASON_COL",
     "UNMATCHED_CANDIDATE_COUNT_COL",
@@ -169,6 +193,38 @@ REVIEW_ENGINE_COL = "Analysed By"
 REVIEW_APPROVAL_COL = "Approval"
 REVIEW_REVIEWER_NOTES_COL = "Reviewer Notes"
 REVIEW_APPLIED_COL = "Applied To AR"
+# Evidence-based resolution (supporting documents)
+REVIEW_DOCUMENTS_COL = "Supporting Documents"
+REVIEW_EVIDENCE_COL = "Evidence Summary"
+REVIEW_CITATIONS_COL = "Evidence Citations"
+REVIEW_CONFLICTS_COL = "Evidence Conflicts"
+REVIEW_SUFFICIENCY_COL = "Evidence Sufficiency"
+REVIEW_ALLOCATIONS_COL = "Proposed Allocations"
+REVIEW_ADJUSTMENTS_COL = "Proposed Adjustments"
+REVIEW_VALIDATION_COL = "Validation Result"
+REVIEW_VALIDATION_NOTES_COL = "Validation Notes"
+REVIEW_RESOLUTION_ID_COL = "Resolution ID"
+REVIEW_REVIEWER_COL = "Reviewer"
+REVIEW_DECISION_TS_COL = "Decision Timestamp"
+
+#: The decisions a reviewer may enter in the Approval column.
+REVIEW_DECISIONS = ("APPROVE", "REJECT", "MORE_EVIDENCE")
+
+# ===== Evidence-based resolution columns on the output sheets =====
+#: The part of the applied cash that came from an approved AI resolution, so
+#: the engine's own result stays recoverable (Applied Amount minus this).
+OUT_AI_APPLIED_AMOUNT_COL = "AI-Resolved Applied Amount"
+#: A non-cash credit to AR approved with a resolution (decision E1).
+OUT_APPROVED_ADJUSTMENT_COL = "Approved Adjustment Amount"
+OUT_APPROVED_ADJUSTMENT_TYPE_COL = "Approved Adjustment Type"
+OUT_RESOLUTION_ID_COL = "Resolution ID"
+BANK_SUPPORTING_DOCS_COL = "Supporting Documents"
+
+# ===== Evidence and audit sheets =====
+DOCUMENTS_SHEET = "Supporting Documents"
+EVIDENCE_SHEET = "Extracted Evidence"
+APPROVAL_RECORDS_SHEET = "Approval Records"
+AUDIT_TRAIL_SHEET = "Audit Trail"
 
 # ===== Unmatched Bank Receipts sheet columns =====
 UNMATCHED_REASON_COL = "Reason"

@@ -111,6 +111,7 @@ from ar_reconciliation.rules.policies import (
 from ar_reconciliation.services.controls import (
     ControlResult,
     compute_controls,
+    control_break_rows,
     is_source_reconciled,
     summary_rows,
 )
@@ -849,6 +850,44 @@ class ReconciliationService:
 
         apply_workbook_formatting(self.output_path)
 
+    def _write_failed_diagnostics(
+        self,
+        ar_df: pd.DataFrame,
+        bank_df: pd.DataFrame,
+        unmatched_bank_rows: list,
+        data_quality_rows: list,
+        controls,
+    ) -> Path:
+        """
+        Keep the evidence of a failed run without finalising it.
+
+        The result workbook is never written when a control breaks.  The
+        diagnostics go to a separate ``..._FAILED.xlsx`` file, marked FAILED,
+        with a Control Breaks sheet naming every receipt and invoice that
+        does not tie.
+        """
+        failed_path = self.output_path.with_name(f"{self.output_path.stem}_FAILED.xlsx")
+        summary_df = pd.DataFrame(
+            [["Run Status", "FAILED"], *summary_rows(controls)[1:]],
+            columns=["Metric", "Value"],
+        )
+        frames = self.build_output_frames(
+            ar_df=ar_df,
+            bank_df=bank_df,
+            unmatched_bank_rows=unmatched_bank_rows,
+            data_quality_rows=data_quality_rows,
+            summary_df=summary_df,
+        )
+        frames["Control Breaks"] = control_break_rows(controls)
+        try:
+            with pd.ExcelWriter(failed_path, engine="openpyxl") as writer:
+                for sheet_name, frame in frames.items():
+                    frame.to_excel(writer, index=False, sheet_name=sheet_name)
+            apply_workbook_formatting(failed_path)
+        except Exception:  # diagnostics must never hide the original failure
+            pass
+        return failed_path
+
     # -- The whole run -----------------------------------------------------
 
     def run(self, verbose: bool = True) -> ReconciliationResult:
@@ -880,8 +919,12 @@ class ReconciliationService:
         )
         controls = compute_controls(ar_df, bank_df, invoice_col=AR_INVOICE_COL)
         if not controls.balanced:
+            failed_path = self._write_failed_diagnostics(
+                ar_df, bank_df, unmatched_bank_rows, data_quality_rows, controls
+            )
             raise ValueError(
-                "Reconciliation controls do not balance; nothing was written. "
+                "Reconciliation controls do not balance; the result workbook was not "
+                f"written. Run status FAILED; diagnostics in {failed_path.name}. "
                 + controls.describe_breaks()
             )
 
