@@ -192,7 +192,7 @@ reconciliation output. It runs on both backends.
 | Proposed invoice not in the candidate pool | Discarded, logged |
 | Proposed amount negative | Reset to 0, logged |
 | Receipt carries no positive net amount | Amount discarded, action forced to `Hold / Escalate` |
-| Proposed amount above the cash received | Capped to the cash received, logged |
+| Proposed amount above the gross receipt amount (decision E5) | Capped to the gross receipt amount, logged |
 | Proposed amount above the combined open amount | Capped, logged |
 | Amount proposed with no invoice named | Amount discarded, logged |
 | Proposed residual disagrees with the AR data | Recomputed from the AR data, logged |

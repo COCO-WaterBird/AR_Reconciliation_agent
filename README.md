@@ -20,6 +20,7 @@
 - [Deterministic Reconciliation Engine](#deterministic-reconciliation-engine)
 - [AI Exception Resolution Agent](#ai-exception-resolution-agent)
 - [Human-in-the-Loop Approval](#human-in-the-loop-approval)
+- [Evidence-Based Exception Resolution](#evidence-based-exception-resolution)
 - [Output](#output)
   - [Data Quality Checks](#data-quality-checks)
   - [AI Exception Log](#ai-exception-log)
@@ -104,6 +105,27 @@ never applies cash, never modifies an AR balance, and never approves its own
 proposal — a recommendation only becomes a match after a human acts on it, and
 the confirmed rule-based matches stay separate from the suggestions in
 separate sheets.
+
+### Evidence-Based Exception Resolution
+
+For receipts in Needs Review, a finance user can attach the customer's
+contract, email or remittance advice:
+
+- Documents are stored unchanged and read-only, with a SHA-256 hash, and
+  linked many-to-many to receipts
+- Payment facts (invoices, allocations, discount terms, instalments,
+  deductions, "paid on behalf of") are extracted with the exact quote and
+  page/line they came from
+- The agent proposes per-invoice allocations and, only when a document
+  supports them, an early-payment discount or a customer deduction
+- Deterministic Python validates every number; conflicting or insufficient
+  evidence keeps the receipt in review
+- A reviewer approves, rejects or requests more evidence; an approved
+  resolution is applied exactly once and recorded in an audit trail
+- Controls are recalculated per currency; a break leaves the report
+  unfinalised and writes a diagnostic workbook
+
+See [Evidence-Based Exception Resolution](#evidence-based-exception-resolution).
 
 ### What one run produces
 
@@ -278,8 +300,9 @@ python -m pip install -r requirements.txt -r requirements-dev.txt
 python -m pip install -e .
 ```
 
-`requirements.txt` installs `pandas`, `openpyxl` and `openai`. The engine and the
-rules backend need only the first two; `openai` is used by the LLM backend.
+`requirements.txt` installs `pandas`, `openpyxl`, `pypdf` and `openai`. The engine
+and the rules backend need only the first two; `pypdf` reads PDF supporting
+documents and `openai` is used by the LLM backend.
 `pip install -e .` installs the package itself so `ar-reconcile` and `ar-agent`
 are available on the command line.
 
@@ -389,7 +412,26 @@ python scripts/run_agent.py --apply-approved
 Only the approved rows are applied to AR. The control totals are re-verified
 afterwards, and the workbook is left untouched if they do not balance.
 
-### 7. Run the tests
+### 7. Resolve exceptions with supporting documents
+
+```bash
+python scripts/manage_evidence.py add remittance.pdf --txn BTRX-000178   # or: load-samples
+python scripts/run_agent.py --evidence-dir data/evidence
+python scripts/manage_evidence.py decide BTRX-000178 APPROVE --reviewer "Your Name"
+python scripts/run_agent.py --evidence-dir data/evidence --apply-approved
+```
+
+Or use the single-page review UI:
+
+```bash
+python -m pip install -r requirements-ui.txt
+streamlit run app/review_app.py
+```
+
+The full demo, with the synthetic sample documents, is in
+[docs/evidence_resolution.md](docs/evidence_resolution.md#9-demo).
+
+### 8. Run the tests
 
 ```bash
 python -m pip install -r requirements.txt -r requirements-dev.txt
@@ -401,7 +443,7 @@ agent's safety rules and the human approval gate. It runs against the sample
 data in this repository, so it exercises the real rules rather than a model of
 them.
 
-### 8. Regenerate the README images
+### 9. Regenerate the README images
 
 The pictures in this README are built from a real run, so the numbers in them
 are the numbers the project actually produces.
@@ -426,6 +468,12 @@ guarded by a test.
 | `tests/test_agent.py` | The validator: an invoice outside the candidate pool is discarded, an amount above the cash is capped, a residual is recomputed from the AR data, a review-only scenario is never auto-matched. |
 | `tests/test_approval_workflow.py` | The approval gate: nothing is applied without an explicit approval, applying twice is idempotent, and the control totals still balance afterwards. |
 | `tests/test_llm_backend.py` | The LLM code path: request building, JSON parsing and validation against a fake OpenAI-compatible server, with no network access and no API key. |
+| `tests/test_engine_edge_cases.py` | Synthetic edge cases for the engine: ambiguity, duplicates, malformed input, instalments, the cash control and AR roll-forward. |
+| `tests/test_evidence_documents.py` | Document store, PDF/email/Excel/CSV parsing, fact extraction, fabricated-fact rejection, conflicts, prompt-injection detection, masking. |
+| `tests/test_evidence_resolution.py` | Evidence-based resolution end to end on a synthetic engine run, with the rules backend and a mocked LLM: every scenario, approve/reject/more evidence, apply-once, per-currency controls, audit trail, FAILED diagnostics. |
+| `tests/test_review_app.py` | Headless run of the review UI through the whole acceptance path (skipped without Streamlit). |
+
+Current result: **236 passed**.
 
 ### The regression baseline
 
@@ -612,7 +660,7 @@ See [Free and Open-Source Model Backends](docs/local_models.md).
 The model is never trusted. Every answer is repaired or downgraded:
 
 - An invoice outside the candidate pool is discarded.
-- An amount above the cash received is capped.
+- An amount above the gross receipt amount is capped (decision E5: the same rule as the engine; a bank fee is booked as a fee adjustment).
 - An amount above the combined open amount of the proposed invoices is capped.
 - A residual that disagrees with the AR data is recomputed from the AR data.
 - `Auto Match` requires `High` confidence.
@@ -661,6 +709,40 @@ recommendation moves to a different invoice or a different amount, the stale
 approval is dropped and the row goes back for review.
 
 ![The human-in-the-loop approval workflow](docs/images/approval-workflow.png)
+
+---
+
+## Evidence-Based Exception Resolution
+
+```mermaid
+flowchart LR
+    NR["Needs Review<br/>receipt"] --> DOC["Documents<br/>PDF / EML / TXT / XLSX / CSV"]
+    DOC --> FACTS["Facts + quote<br/>+ page/line"]
+    FACTS --> AI["Agent proposal<br/>allocations, adjustments,<br/>citations"]
+    AI --> VAL["Deterministic<br/>validation"]
+    VAL --> REV["Reviewer:<br/>approve / reject /<br/>more evidence"]
+    REV --> APPLY["Apply once<br/>(Resolution ID)"]
+    APPLY --> CTRL["Controls per currency<br/>FINAL or FAILED"]
+```
+
+| Implemented | Not implemented (out of scope) |
+|---|---|
+| Manual upload of contracts, emails and remittance advice; read-only originals with hashes | Gmail / mailbox integration, automatic email |
+| Deterministic extraction; optional LLM extraction kept only when the quote is in the document | OCR for scanned PDFs |
+| Evidence-aware rules and LLM backends with citations and sufficiency | Vector search, multi-agent orchestration |
+| Validation: candidate pool, open balances, gross cash cap, discount terms and window, stated deductions, third-party only when documented | Automatic GL posting, ERP or bank API integration |
+| Approve / reject / request more evidence; apply exactly once; approval records and audit trail | Multi-user approval service, SSO |
+| Cash completeness and AR roll-forward per currency; FAILED diagnostics | FX revaluation between currencies |
+
+Business decisions applied: **E1** non-cash adjustments only as Early Payment
+Discount or Customer Deduction, document-backed and approved, no write-offs;
+**E2** third-party payments only when a document names the invoice customer;
+**E3** only masked facts and short quotes are sent to an external LLM;
+**E4** optional Streamlit review UI; **E5** AI cash capped at the gross
+receipt, like the engine.
+
+Details, document requirements, the demo and known limitations:
+[docs/evidence_resolution.md](docs/evidence_resolution.md).
 
 ---
 
@@ -800,6 +882,12 @@ same shape.
 - Exception reporting and control totals
 - AI exception analysis with a deterministic and an LLM backend
 - Human approval gate with an idempotent write-back
+- Evidence-based exception resolution: document upload, fact extraction with
+  citations, evidence-aware AI recommendations, deterministic validation,
+  approve / reject / request more evidence, apply-once, audit trail
+- Cash completeness and AR roll-forward controls, per currency, with FAILED
+  diagnostics on a break
+- Single-page review UI (Streamlit, optional)
 - Automated test suite covering the matching rules, the AI safety rules and
   the approval gate
 - Continuous integration with a stored regression baseline
@@ -825,7 +913,7 @@ agent — not an ERP platform.
 
 | | |
 |---|---|
-| Input | Bank Statement Excel + AR Open Items Excel |
+| Input | Bank Statement Excel + AR Open Items Excel, plus optional supporting documents (contracts, emails, remittance advice) |
 | Output | Reconciliation Results Excel |
 | Storage | None. File-based, read-only sources |
 
@@ -846,14 +934,17 @@ report for a human to read.
 - [x] Clear separation of confirmed and suggested — rule-based matches and
       AI-suggested matches are reported separately and are never mixed
 - [x] Duplicate-application prevention — a receipt is never applied twice
-- [x] Regression tests — 119 tests and a stored baseline
+- [x] Regression tests — 236 tests and a stored baseline
+- [x] Evidence-based exception resolution — the three steps of the target
+      workflow below
 
-**Target workflow**
+**Target workflow — implemented**
 
-The next stage keeps the existing engine as Stage 1 and extends the review
-path. Receipts the engine matches keep their result with no AI involvement.
-Receipts that need review gain three new steps (①–③) before everything flows
-into the financial controls and the final report.
+The existing engine stays Stage 1. Receipts the engine matches keep their
+result with no AI involvement. Receipts that need review go through three
+steps (①–③) before everything flows into the financial controls and the
+final report. All three are implemented; see
+[docs/evidence_resolution.md](docs/evidence_resolution.md).
 
 ```mermaid
 flowchart TD
@@ -892,10 +983,10 @@ flowchart TD
 | Bank Statement + AR Detail | Existing | Source inputs |
 | Stage 1 — Reconciliation Engine | Existing, being improved | Deterministic matching and routing |
 | Matched → keep result | Existing | No AI intervention for confirmed matches |
-| ① Upload contracts and emails | New | Supporting documents for receipts that need review |
-| ② AI Evidence Analysis | New | Extract evidence and explain the exception |
-| ③ Human Review | New | A reviewer confirms or rejects the matching suggestion |
-| Financial Controls & Final Report | Existing, to be extended | Cash control, AR roll-forward and the final report |
+| ① Upload contracts and emails | Implemented | Supporting documents for receipts that need review |
+| ② AI Evidence Analysis | Implemented | Extract evidence and explain the exception |
+| ③ Human Review | Implemented | A reviewer confirms or rejects the matching suggestion |
+| Financial Controls & Final Report | Implemented (extended) | Cash control, AR roll-forward and audit trail, per currency |
 
 **Out of scope for the MVP**
 
@@ -939,6 +1030,7 @@ Potential use cases include:
 - [Reconciliation Logic](docs/reconciliation_logic.md) — matching rules, output statuses, match methods
 - [AI Exception Agent](docs/ai_exception_agent.md) — the agent's design, safety rules and review workflow
 - [Free and Open-Source Model Backends](docs/local_models.md) — running the agent on a free local model
+- [Evidence-Based Exception Resolution](docs/evidence_resolution.md) — documents, extraction, validation, review, controls, demo, limitations
 - [Data Dictionary](docs/data_dictionary.md) — every input and output column
 - [Scenario Coverage](docs/scenario_coverage.md) — S01–S40 scenario reference and measured baseline
 - [Prompt](docs/prompt.md) — the original automation specification
