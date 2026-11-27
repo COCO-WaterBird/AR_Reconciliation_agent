@@ -848,6 +848,55 @@ report for a human to read.
 - [x] Duplicate-application prevention — a receipt is never applied twice
 - [x] Regression tests — 119 tests and a stored baseline
 
+**Target workflow**
+
+The next stage keeps the existing engine as Stage 1 and extends the review
+path. Receipts the engine matches keep their result with no AI involvement.
+Receipts that need review gain three new steps (①–③) before everything flows
+into the financial controls and the final report.
+
+```mermaid
+flowchart TD
+    BANK["🏦 <b>Bank Statement</b><br/>银行流水"]
+    AR["▦ <b>AR Detail</b><br/>应收账款明细"]
+    ENGINE["<b>Stage 1 — Reconciliation Engine</b><br/>已有对账引擎，继续完善"]
+    MATCHED["✅ <b>Matched</b><br/>匹配成功"]
+    REVIEW["❗ <b>Needs Review</b><br/>待审核异常"]
+    KEEP["<b>保留对账结果</b><br/>不需要 AI 干预"]
+    UPLOAD["📄✉️ <b>上传合同和邮件</b><br/>新增功能 ①"]
+    EVIDENCE["<b>AI Evidence Analysis</b><br/>新增功能 ②：提取证据、解释异常"]
+    HUMAN["<b>Human Review</b><br/>新增功能 ③：确认匹配建议"]
+    REPORT["<b>Financial Controls &amp; Final Report</b><br/>扩展现有财务控制与报告模块"]
+
+    BANK --> ENGINE
+    AR --> ENGINE
+    ENGINE --> MATCHED
+    ENGINE --> REVIEW
+    MATCHED --> KEEP
+    REVIEW --> UPLOAD
+    UPLOAD --> EVIDENCE
+    EVIDENCE --> HUMAN
+    KEEP --> REPORT
+    HUMAN --> REPORT
+
+    classDef new fill:#eef4ff,stroke:#4a6fa5,color:#1b2a41;
+    classDef ok fill:#eaf6ec,stroke:#2e7d32,color:#1b3d1f;
+    classDef warn fill:#fdf0e6,stroke:#b5541c,color:#4a2410;
+    class UPLOAD,EVIDENCE,HUMAN new;
+    class MATCHED,KEEP ok;
+    class REVIEW warn;
+```
+
+| Step | Status | Purpose |
+|---|---|---|
+| Bank Statement + AR Detail | Existing | Source inputs |
+| Stage 1 — Reconciliation Engine | Existing, being improved | Deterministic matching and routing |
+| Matched → keep result | Existing | No AI intervention for confirmed matches |
+| ① Upload contracts and emails | New | Supporting documents for receipts that need review |
+| ② AI Evidence Analysis | New | Extract evidence and explain the exception |
+| ③ Human Review | New | A reviewer confirms or rejects the matching suggestion |
+| Financial Controls & Final Report | Existing, to be extended | Cash control, AR roll-forward and the final report |
+
 **Out of scope for the MVP**
 
 The MVP deliberately stops at the report. These were considered and dropped:
