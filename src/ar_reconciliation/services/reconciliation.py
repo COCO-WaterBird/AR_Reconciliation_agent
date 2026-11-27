@@ -330,7 +330,7 @@ class ReconciliationService:
         issues: list[dict[str, object]] = []
 
         if bank_df is not None and DQ_REASON_COL in bank_df.columns:
-            flagged = bank_df.loc[bank_df[DQ_REASON_COL].fillna("") != ""]
+            flagged = bank_df.loc[bank_df[DQ_REASON_COL].astype(object).fillna("") != ""]
             for _, row in flagged.iterrows():
                 issues.append(
                     {
@@ -347,7 +347,7 @@ class ReconciliationService:
                 )
 
         if DQ_REASON_COL in ar_df.columns:
-            flagged = ar_df.loc[ar_df[DQ_REASON_COL].fillna("") != ""]
+            flagged = ar_df.loc[ar_df[DQ_REASON_COL].astype(object).fillna("") != ""]
             for idx, row in flagged.iterrows():
                 issues.append(
                     {
@@ -369,12 +369,12 @@ class ReconciliationService:
 
         bad_ar_mask = (ar_df["__ar_open_amount_cents"] != 0) & (
             ar_df[AR_STATUS_COL]
-            .fillna("")
+            .astype(object).fillna("")
             .str.strip()
             .str.lower()
             .isin({"closed"})
             | ar_df[AR_RECON_STATUS_COL]
-            .fillna("")
+            .astype(object).fillna("")
             .str.strip()
             .str.lower()
             .isin({"reconciled", "matched", "closed"})
@@ -771,7 +771,7 @@ class ReconciliationService:
         # Blank means the AR row never received a reconciliation result in
         # this run.  Use an explicit status for reporting clarity.
         ar_df[OUT_SUGGESTED_RECON_STATUS_COL] = (
-            ar_df[OUT_SUGGESTED_RECON_STATUS_COL].fillna("").astype(str).str.strip()
+            ar_df[OUT_SUGGESTED_RECON_STATUS_COL].astype(object).fillna("").astype(str).str.strip()
         )
         ar_df.loc[
             ar_df[OUT_SUGGESTED_RECON_STATUS_COL] == "",

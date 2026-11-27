@@ -101,7 +101,7 @@ def find_invoice_reference_match(
     # applied to its remaining balance.  A fully cleared invoice is excluded.
     working_balance = inv_df["__ar_open_amount_cents"]
     fully_cleared = (
-        inv_df[OUT_MATCHED_BANK_TXN_COL].fillna("").astype(str).str.strip() != ""
+        inv_df[OUT_MATCHED_BANK_TXN_COL].astype(object).fillna("").astype(str).str.strip() != ""
     ) & (working_balance <= 0)
     inv_df = inv_df[~fully_cleared]
     if inv_df.empty:

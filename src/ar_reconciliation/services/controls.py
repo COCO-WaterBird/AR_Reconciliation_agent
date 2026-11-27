@@ -220,7 +220,7 @@ def _compute(ar_df: pd.DataFrame, bank_df: pd.DataFrame, invoice_col: str) -> Co
     ]
     if "__dq_reason" in bank_df.columns:
         result.unreadable_receipts = int(
-            bank_df["__dq_reason"].fillna("").astype(str).str.contains("not a readable amount").sum()
+            bank_df["__dq_reason"].astype(object).fillna("").astype(str).str.contains("not a readable amount").sum()
         )
 
     # --- 2. Bank vs AR applied cash --------------------------------------
@@ -274,15 +274,15 @@ def compute_output_controls(ar_df: pd.DataFrame, bank_df: pd.DataFrame) -> Contr
     ):
         if column not in bank.columns:
             bank[column] = ""
-        bank[column] = bank[column].fillna("")
-    bank[BANK_APPLIED_AMOUNT_TOTAL_COL] = bank[BANK_APPLIED_AMOUNT_TOTAL_COL].fillna("")
+        bank[column] = bank[column].astype(object).fillna("")
+    bank[BANK_APPLIED_AMOUNT_TOTAL_COL] = bank[BANK_APPLIED_AMOUNT_TOTAL_COL].astype(object).fillna("")
     bank["__gross_amount_cents"], _ = parse_money_column(bank, BANK_GROSS_AMOUNT_COL)
 
-    ar[OUT_APPLIED_AMOUNT_COL] = ar[OUT_APPLIED_AMOUNT_COL].fillna("")
+    ar[OUT_APPLIED_AMOUNT_COL] = ar[OUT_APPLIED_AMOUNT_COL].astype(object).fillna("")
     opening, _ = parse_money_column(ar, AR_OPEN_AMOUNT_COL)
     applied = _cents(ar[OUT_APPLIED_AMOUNT_COL])
     if OUT_APPROVED_ADJUSTMENT_COL in ar.columns:
-        adjusted = _cents(ar[OUT_APPROVED_ADJUSTMENT_COL].fillna(""))
+        adjusted = _cents(ar[OUT_APPROVED_ADJUSTMENT_COL].astype(object).fillna(""))
     else:
         adjusted = pd.Series(0, index=ar.index, dtype="int64")
     ar["__ar_original_open_cents"] = opening

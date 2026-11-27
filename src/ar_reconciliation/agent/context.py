@@ -190,7 +190,7 @@ def build_candidate_pool(
         & (ar_df[AR_OPEN_AMOUNT_COL].apply(money_to_cents) > 0)
         & (
             ~ar_df[AR_RECON_STATUS_COL]
-            .fillna("")
+            .astype(object).fillna("")
             .astype(str)
             .str.strip()
             .str.lower()
@@ -198,7 +198,7 @@ def build_candidate_pool(
         )
         & (
             ~ar_df[AR_STATUS_COL]
-            .fillna("")
+            .astype(object).fillna("")
             .astype(str)
             .str.strip()
             .str.lower()

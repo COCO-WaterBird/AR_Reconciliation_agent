@@ -218,16 +218,16 @@ def _refresh_summary(summary_df: pd.DataFrame, controls: Any, review_df: pd.Data
     summary = refresh_summary(summary_df, controls, applied_count)
     ai_cash = 0
     if OUT_AI_APPLIED_AMOUNT_COL in result_df.columns:
-        ai_cash = int(result_df[OUT_AI_APPLIED_AMOUNT_COL].fillna("").apply(money_to_cents).sum())
+        ai_cash = int(result_df[OUT_AI_APPLIED_AMOUNT_COL].astype(object).fillna("").apply(money_to_cents).sum())
     adjustments = 0
     if OUT_APPROVED_ADJUSTMENT_COL in ar_df.columns:
-        adjustments = int(ar_df[OUT_APPROVED_ADJUSTMENT_COL].fillna("").apply(money_to_cents).sum())
+        adjustments = int(ar_df[OUT_APPROVED_ADJUSTMENT_COL].astype(object).fillna("").apply(money_to_cents).sum())
     resolutions = 0
     if "Resolution ID" in result_df.columns:
-        resolutions = int(result_df["Resolution ID"].fillna("").astype(str).str.strip().ne("").sum())
+        resolutions = int(result_df["Resolution ID"].astype(object).fillna("").astype(str).str.strip().ne("").sum())
     still_open = 0
     if not review_df.empty and REVIEW_APPLIED_COL in review_df.columns:
-        still_open = int((review_df[REVIEW_APPLIED_COL].fillna("").astype(str) != "Yes").sum())
+        still_open = int((review_df[REVIEW_APPLIED_COL].astype(object).fillna("").astype(str) != "Yes").sum())
     updates = [
         ["AI-ASSISTED RESOLUTION", ""],
         ["Evidence-based resolutions applied", resolutions],
@@ -329,7 +329,7 @@ def apply_decisions(
     # The count on the Summary is cumulative: every receipt the AI path has
     # applied so far, not only the ones applied by this run.
     total_applied = int(
-        result_updated["Match Method"].fillna("").astype(str)
+        result_updated["Match Method"].astype(object).fillna("").astype(str)
         .isin({"AI Approved Match", "AI Approved Resolution"}).sum()
     )
     summary_df = _refresh_summary(
