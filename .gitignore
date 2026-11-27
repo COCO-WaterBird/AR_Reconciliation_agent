@@ -46,3 +46,9 @@ env/
 
 # Scratch workbooks written outside data/output/.
 Open_AR_Detail_Reconciled_Result *.xlsx
+
+# Uploaded supporting documents (contracts, emails, remittance advice) and
+# their manifest.  These can hold confidential customer data and must never
+# reach version control.  Synthetic demo documents live in
+# data/sample/evidence/ instead.
+data/evidence/

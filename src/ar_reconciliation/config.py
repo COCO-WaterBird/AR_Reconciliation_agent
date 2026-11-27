@@ -21,6 +21,8 @@ import os
 from pathlib import Path
 
 __all__ = [
+    "EVIDENCE_DIR",
+    "SAMPLE_EVIDENCE_DIR",
     "PROJECT_ROOT",
     "SRC_DIR",
     "DATA_DIR",
@@ -53,6 +55,9 @@ DATA_DIR = PROJECT_ROOT / "data"
 INPUT_DIR = DATA_DIR / "input"
 OUTPUT_DIR = DATA_DIR / "output"
 SAMPLE_DIR = DATA_DIR / "sample"
+#: Uploaded supporting documents (gitignored) and the synthetic demo set.
+EVIDENCE_DIR = DATA_DIR / "evidence"
+SAMPLE_EVIDENCE_DIR = SAMPLE_DIR / "evidence"
 DOCS_DIR = PROJECT_ROOT / "docs"
 
 BASELINE_FILE = DATA_DIR / "baseline.json"

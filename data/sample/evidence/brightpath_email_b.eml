@@ -1,0 +1,11 @@
+From: finance@brightpath.example
+To: ar@example-company.example
+Date: Wed, 17 Jun 2026 16:20:00 -0400
+Subject: Allocation of our 17 June payment
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+
+Please apply our payment as follows:
+INV-900157 4,800.00
+INV-900175 400.00
