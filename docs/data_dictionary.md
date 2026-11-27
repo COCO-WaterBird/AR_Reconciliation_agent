@@ -52,6 +52,9 @@ The script may add or update the following columns in the processed bank receipt
 | Match Method | Matching method used for the receipt. |
 | Suggested Bank Status | Suggested status for the receipt: `Reconciled`, `Pending Review`, or `Exception`. The source `Status` column is never modified. |
 | AR Applied Amount Total | Total cash applied to AR by this receipt. Used for the AR/bank control total. |
+| Unapplied Amount | Cash received beyond the AR the receipt settled (an overpayment). It stays on account for review. |
+| Fee / Rounding Adjustment | Part of the gross receipt that is neither applied to AR nor unapplied cash: a bank fee deducted before AR was cleared at net, or a signed penny rounding variance. |
+| Held For Review Amount | Gross amount of a receipt that was not applied at all and is waiting in review (unmatched, ambiguous, duplicate, held by the input integrity checks). |
 
 ## 2. Open_AR_Detail.xlsx
 
@@ -108,7 +111,7 @@ The automation creates a new workbook instead of overwriting the source files.
 | Processed Bank Receipts | Bank receipt detail after processing. Contains updated receipt status, extracted invoice numbers, memo scenario, match method, and processing notes. |
 | Unmatched Bank Receipts | Bank receipts that could not be auto-matched or were routed to exception review. |
 | Data Quality Checks | Data quality issues found in the AR data, such as closed or reconciled invoices with non-zero open amount. |
-| Summary | Key run metrics such as matched receipts, matched invoices, pending review receipts, exceptions, and data quality issue count. |
+| Summary | Key run metrics such as matched receipts, matched invoices, pending review receipts, exceptions, and data quality issue count, followed by the controls. **Cash control:** total gross receipts = applied to AR + unapplied cash + fee/rounding adjustments + held for review + already reconciled in source, checked per receipt. **AR roll-forward:** open AR before the run − applied in this run = open AR remaining, checked per invoice. The run writes nothing if either control breaks. |
 | AI Exception Review | Written by `src/ar_reconciliation/agent/`. One row per unmatched receipt with the agent's exception type, root cause, recommended action, confidence, proposed invoices and amounts, accounting treatment, proposed GL posting, explanation, and the reviewer's `Approval` decision. |
 | AI Exception Log | Written by `src/ar_reconciliation/agent/`. One row per validation repair, model error or apply outcome, so every change the agent made to a recommendation is auditable. |
 

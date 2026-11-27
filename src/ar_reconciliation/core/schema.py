@@ -57,6 +57,9 @@ __all__ = [
     "OUT_MATCH_METHOD_BANK_COL",
     "OUT_SUGGESTED_BANK_STATUS_COL",
     "BANK_APPLIED_AMOUNT_TOTAL_COL",
+    "BANK_UNAPPLIED_AMOUNT_COL",
+    "BANK_ADJUSTMENT_AMOUNT_COL",
+    "BANK_HELD_AMOUNT_COL",
     # Review sheet columns
     "REVIEW_BANK_TXN_COL",
     "REVIEW_RECOMMENDED_ACTION_COL",
@@ -139,6 +142,15 @@ OUT_MEMO_SCENARIO_COL = "Memo Scenario"
 OUT_MATCH_METHOD_BANK_COL = "Match Method"
 OUT_SUGGESTED_BANK_STATUS_COL = "Suggested Bank Status"
 BANK_APPLIED_AMOUNT_TOTAL_COL = "AR Applied Amount Total"
+#: Cash received beyond the AR a receipt settled (an overpayment).  It stays
+#: on account until a reviewer decides what to do with it.
+BANK_UNAPPLIED_AMOUNT_COL = "Unapplied Amount"
+#: Part of the gross receipt that is neither applied to AR nor unapplied
+#: cash: a bank fee deducted before AR was cleared at net, or a signed penny
+#: rounding variance.
+BANK_ADJUSTMENT_AMOUNT_COL = "Fee / Rounding Adjustment"
+#: Gross amount of a receipt that was not applied at all and waits in review.
+BANK_HELD_AMOUNT_COL = "Held For Review Amount"
 
 # ===== AI Exception Review sheet columns =====
 REVIEW_BANK_TXN_COL = "Bank Transaction ID"

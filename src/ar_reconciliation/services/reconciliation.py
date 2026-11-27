@@ -40,20 +40,25 @@ from ar_reconciliation.core.schema import (
     AR_INVOICE_DATE_COL,
     AR_OPEN_AMOUNT_COL,
     AR_RECON_STATUS_COL,
+    AR_PARENT_CUSTOMER_ID_COL,
     AR_STATUS_COL,
+    BANK_ADJUSTMENT_AMOUNT_COL,
     BANK_APPLIED_AMOUNT_TOTAL_COL,
     BANK_CUSTOMER_ID_COL,
     BANK_CUSTOMER_NAME_COL,
     BANK_CURRENCY_COL,
     BANK_FEES_COL,
     BANK_GROSS_AMOUNT_COL,
+    BANK_HELD_AMOUNT_COL,
     BANK_MEMO_COL,
     BANK_NET_AMOUNT_COL,
     BANK_POSTING_DATE_COL,
     BANK_PROCESSING_NOTES_COL,
     BANK_RECON_BATCH_ID_COL,
+    BANK_REMITTER_NAME_COL,
     BANK_STATUS_COL,
     BANK_TRANSACTION_ID_COL,
+    BANK_UNAPPLIED_AMOUNT_COL,
     BANK_VALUE_DATE_COL,
     OUT_APPLIED_AMOUNT_COL,
     OUT_EXTRACTED_INVOICES_COL,
@@ -68,6 +73,12 @@ from ar_reconciliation.core.schema import (
     OUT_SUGGESTED_BANK_STATUS_COL,
     OUT_SUGGESTED_RECON_STATUS_COL,
 )
+from ar_reconciliation.io.integrity import (
+    DQ_REASON_COL,
+    flag_ar_integrity_issues,
+    flag_bank_integrity_issues,
+    parse_money_column,
+)
 from ar_reconciliation.io.workbook import (
     apply_workbook_formatting,
     ensure_output_columns,
@@ -80,6 +91,7 @@ from ar_reconciliation.matching.algorithms import (
     find_partial_combination_match,
 )
 from ar_reconciliation.matching.application import apply_match, build_payment_signature
+from ar_reconciliation.matching.models import AmbiguousMatch
 from ar_reconciliation.matching.candidates import (
     build_candidate_mask,
     build_name_fallback_keys,
@@ -94,6 +106,13 @@ from ar_reconciliation.rules.policies import (
     ENGINE_REVIEW_ONLY_SCENARIOS,
     ENGINE_REVIEW_ONLY_SCENARIOS as REVIEW_ONLY_SCENARIOS,
     NAME_FALLBACK_SCENARIOS,
+    UNRESTRICTED_PARTIAL_SCENARIOS,
+)
+from ar_reconciliation.services.controls import (
+    ControlResult,
+    compute_controls,
+    is_source_reconciled,
+    summary_rows,
 )
 
 #: The scenarios the engine refuses to auto-reconcile.  Re-exported under the
@@ -119,6 +138,7 @@ class ReconciliationResult:
     reconciled_ar_total_cents: int = 0
     reconciled_bank_total_cents: int = 0
     control_difference_cents: int = 0
+    controls: ControlResult | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -215,7 +235,20 @@ class ReconciliationService:
             OUT_MATCH_METHOD_BANK_COL,
             OUT_SUGGESTED_BANK_STATUS_COL,
             BANK_APPLIED_AMOUNT_TOTAL_COL,
+            BANK_UNAPPLIED_AMOUNT_COL,
+            BANK_ADJUSTMENT_AMOUNT_COL,
+            BANK_HELD_AMOUNT_COL,
         ]
+
+        # Columns the engine reads but does not require.  A source file
+        # without them is still valid; they default to blank.
+        for frame, column in (
+            (bank_df, BANK_POSTING_DATE_COL),
+            (bank_df, BANK_REMITTER_NAME_COL),
+            (ar_df, AR_PARENT_CUSTOMER_ID_COL),
+        ):
+            if column not in frame.columns:
+                frame[column] = ""
 
         ensure_output_columns(ar_df, ar_result_columns)
         ensure_output_columns(bank_df, bank_result_columns)
@@ -227,15 +260,20 @@ class ReconciliationService:
         bank_df.loc[:, bank_result_columns] = ""
 
         # --- Working columns ---
-        bank_df["__gross_amount_cents"] = bank_df[BANK_GROSS_AMOUNT_COL].apply(
-            money_to_cents
+        # An amount that cannot be read becomes 0 here and its row is held
+        # out of matching by the integrity checks below - it is never
+        # silently treated as a real zero.
+        bank_df["__gross_amount_cents"], gross_errors = parse_money_column(
+            bank_df, BANK_GROSS_AMOUNT_COL
         )
-        bank_df["__bank_fee_cents"] = bank_df[BANK_FEES_COL].apply(money_to_cents)
-        bank_df["__net_amount_cents"] = bank_df[BANK_NET_AMOUNT_COL].apply(
-            money_to_cents
+        bank_df["__bank_fee_cents"], fee_errors = parse_money_column(
+            bank_df, BANK_FEES_COL
         )
-        ar_df["__ar_open_amount_cents"] = ar_df[AR_OPEN_AMOUNT_COL].apply(
-            money_to_cents
+        bank_df["__net_amount_cents"], net_errors = parse_money_column(
+            bank_df, BANK_NET_AMOUNT_COL
+        )
+        ar_df["__ar_open_amount_cents"], open_errors = parse_money_column(
+            ar_df, AR_OPEN_AMOUNT_COL
         )
         # Original open amount, kept so that cumulative applied amounts and
         # the remaining balance can be recalculated across multiple
@@ -259,6 +297,11 @@ class ReconciliationService:
         )
         ar_df["__invoice_key"] = ar_df[AR_INVOICE_COL].apply(normalize_invoice)
 
+        flag_bank_integrity_issues(
+            bank_df, BANK_TRANSACTION_ID_COL, [gross_errors, fee_errors, net_errors]
+        )
+        flag_ar_integrity_issues(ar_df, AR_INVOICE_COL, [open_errors])
+
         bank_df[OUT_EXTRACTED_INVOICES_COL] = bank_df[BANK_MEMO_COL].apply(
             lambda x: ", ".join(extract_invoice_numbers(x))
         )
@@ -269,15 +312,59 @@ class ReconciliationService:
     # -- Data quality ------------------------------------------------------
 
     @staticmethod
-    def collect_data_quality_issues(ar_df: pd.DataFrame) -> list[dict[str, object]]:
+    def collect_data_quality_issues(
+        ar_df: pd.DataFrame, bank_df: pd.DataFrame | None = None
+    ) -> list[dict[str, object]]:
         """
-        Find AR rows whose source data is internally inconsistent.
+        Find source rows that cannot be matched safely.
 
-        A row that is closed or reconciled but still carries a non-zero open
-        amount cannot be matched safely, so it is reported rather than
-        silently skipped.
+        Reported, never silently skipped:
+
+          * AR rows that are closed or reconciled but still carry a non-zero
+            open amount;
+          * AR rows and bank receipts held out by the input integrity checks
+            (unreadable amount, duplicated invoice number, blank or repeated
+            Bank Transaction ID).
         """
         issues: list[dict[str, object]] = []
+
+        if bank_df is not None and DQ_REASON_COL in bank_df.columns:
+            flagged = bank_df.loc[bank_df[DQ_REASON_COL].fillna("") != ""]
+            for _, row in flagged.iterrows():
+                issues.append(
+                    {
+                        "Issue": row[DQ_REASON_COL],
+                        "Source": "Bank Receipts",
+                        BANK_TRANSACTION_ID_COL: row.get(BANK_TRANSACTION_ID_COL, ""),
+                        AR_CUSTOMER_ID_COL: row.get(BANK_CUSTOMER_ID_COL, ""),
+                        "Customer Name": row.get(BANK_CUSTOMER_NAME_COL, ""),
+                        "Recommendation": (
+                            "Correct the bank record and re-run. The receipt was "
+                            "not applied and is held for review."
+                        ),
+                    }
+                )
+
+        if DQ_REASON_COL in ar_df.columns:
+            flagged = ar_df.loc[ar_df[DQ_REASON_COL].fillna("") != ""]
+            for idx, row in flagged.iterrows():
+                issues.append(
+                    {
+                        "Issue": row[DQ_REASON_COL],
+                        "Source": "Open AR",
+                        "AR Row Index": idx,
+                        AR_CUSTOMER_ID_COL: row.get(AR_CUSTOMER_ID_COL, ""),
+                        "Customer Name": row.get(AR_CUSTOMER_NAME_COL, ""),
+                        AR_INVOICE_COL: row.get(AR_INVOICE_COL, ""),
+                        AR_OPEN_AMOUNT_COL: row.get(AR_OPEN_AMOUNT_COL, ""),
+                        AR_STATUS_COL: row.get(AR_STATUS_COL, ""),
+                        AR_RECON_STATUS_COL: row.get(AR_RECON_STATUS_COL, ""),
+                        "Recommendation": (
+                            "Correct the AR record and re-run. The invoice was "
+                            "excluded from matching."
+                        ),
+                    }
+                )
 
         bad_ar_mask = (ar_df["__ar_open_amount_cents"] != 0) & (
             ar_df[AR_STATUS_COL]
@@ -296,6 +383,7 @@ class ReconciliationService:
             issues.append(
                 {
                     "Issue": "Closed/reconciled AR row has non-zero Open Amount",
+                    "Source": "Open AR",
                     "AR Row Index": idx,
                     AR_CUSTOMER_ID_COL: row.get(AR_CUSTOMER_ID_COL, ""),
                     "Customer Name": row.get(AR_CUSTOMER_NAME_COL, ""),
@@ -351,7 +439,7 @@ class ReconciliationService:
         Returns the frames plus the counters the summary sheet reports.
         """
         unmatched_bank_rows: list[dict[str, object]] = []
-        data_quality_rows = self.collect_data_quality_issues(ar_df)
+        data_quality_rows = self.collect_data_quality_issues(ar_df, bank_df)
 
         matched_receipt_count = 0
         matched_invoice_count = 0
@@ -367,8 +455,7 @@ class ReconciliationService:
 
         for bank_index, bank_row in bank_df.iterrows():
             # Skip rows already reconciled in source data (read-only check).
-            bank_status = normalize_text(bank_row[BANK_STATUS_COL]).lower()
-            if bank_status in {"reconciled", "matched", "closed"}:
+            if is_source_reconciled(bank_row[BANK_STATUS_COL]):
                 continue
 
             target_gross_cents = int(bank_row["__gross_amount_cents"])
@@ -404,8 +491,30 @@ class ReconciliationService:
                 target_gross_cents=target_gross_cents,
             )
 
+            # Held out by the input integrity checks: an unreadable amount or
+            # a blank / repeated transaction ID.  Never applied.
+            integrity_reason = normalize_text(bank_row.get(DQ_REASON_COL, ""))
+            if integrity_reason:
+                route_to_review(
+                    bank_df=bank_df,
+                    bank_index=bank_index,
+                    bank_row=bank_row,
+                    reason=f"Held by input integrity checks: {integrity_reason}.",
+                    unmatched_rows=unmatched_bank_rows,
+                    scenario=scenario,
+                    extracted_invoices=extracted_invoices,
+                    status="Exception",
+                    candidate_info=candidate_info,
+                )
+                continue
+
+            # Equal instalments against the same invoice are a legitimate
+            # pattern (D3), so instalment memos are exempt from the signature
+            # check.  They stay protected against over-application by the
+            # invoice's remaining balance.
             if (
                 payment_signature is not None
+                and scenario not in UNRESTRICTED_PARTIAL_SCENARIOS
                 and payment_signature in processed_payment_signatures
             ):
                 mark_duplicate_receipt(
@@ -509,6 +618,29 @@ class ReconciliationService:
                 match_result = find_amount_combination_match(
                     candidates_df, target_gross_cents
                 )
+                if isinstance(match_result, AmbiguousMatch):
+                    # Several invoice sets explain the receipt equally (D1).
+                    # Choosing one would be a guess, so a human decides.
+                    options = " | ".join(
+                        " + ".join(alt) for alt in match_result.alternatives
+                    )
+                    route_to_review(
+                        bank_df=bank_df,
+                        bank_index=bank_index,
+                        bank_row=bank_row,
+                        reason=(
+                            "Ambiguous amount match: more than one set of open "
+                            "invoices equals the gross receipt amount (for "
+                            f"example {options}). Confirm the intended invoices "
+                            "with the customer."
+                        ),
+                        unmatched_rows=unmatched_bank_rows,
+                        scenario=scenario,
+                        extracted_invoices=extracted_invoices,
+                        candidate_info=candidate_info,
+                    )
+                    pending_review_count += 1
+                    continue
                 if match_result is None:
                     # Second chance: the scenario may legitimately leave a
                     # residual.
@@ -538,6 +670,30 @@ class ReconciliationService:
                 and "Partial" not in match_result.method
                 and "Short Payment" not in match_result.method
             )
+
+            # A residual-bearing match across several invoices (D2): the
+            # receipt does not say how the shortfall or excess is split
+            # between them, so the allocation is left to a human.
+            if not close_invoice and len(match_result.ar_indexes) > 1:
+                named = ", ".join(
+                    ar_df.loc[match_result.ar_indexes, AR_INVOICE_COL].astype(str)
+                )
+                route_to_review(
+                    bank_df=bank_df,
+                    bank_index=bank_index,
+                    bank_row=bank_row,
+                    reason=(
+                        f"{match_result.method}: the receipt leaves a residual "
+                        f"across several invoices ({named}); the allocation "
+                        "between them is not stated, so it was not applied."
+                    ),
+                    unmatched_rows=unmatched_bank_rows,
+                    scenario=scenario,
+                    extracted_invoices=extracted_invoices,
+                    candidate_info=candidate_info,
+                )
+                pending_review_count += 1
+                continue
             receipt_added, invoice_added = apply_match(
                 ar_df=ar_df,
                 bank_df=bank_df,
@@ -633,6 +789,7 @@ class ReconciliationService:
             "__invoice_key",
             "__memo_order",
             "__has_memo_invoice",
+            DQ_REASON_COL,
         ]
         ar_output = ar_df.drop(
             columns=[c for c in helper_cols if c in ar_df.columns], errors="ignore"
@@ -651,6 +808,8 @@ class ReconciliationService:
             data_quality_rows,
             columns=[
                 "Issue",
+                "Source",
+                BANK_TRANSACTION_ID_COL,
                 "AR Row Index",
                 AR_CUSTOMER_ID_COL,
                 "Customer Name",
@@ -719,12 +878,11 @@ class ReconciliationService:
         ar_total, bank_total, difference = self.compute_control_totals(
             ar_df, bank_df
         )
-        if difference != 0:
+        controls = compute_controls(ar_df, bank_df, invoice_col=AR_INVOICE_COL)
+        if not controls.balanced:
             raise ValueError(
-                "Reconciliation imbalance detected before output: "
-                f"AR Applied Amount = {cents_to_money(ar_total):,.2f}; "
-                f"Bank AR Applied Amount Total = {cents_to_money(bank_total):,.2f}; "
-                f"Difference = {cents_to_money(difference):,.2f}."
+                "Reconciliation controls do not balance; nothing was written. "
+                + controls.describe_breaks()
             )
 
         summary_df = pd.DataFrame(
@@ -740,6 +898,7 @@ class ReconciliationService:
                 ["Reconciled AR applied amount", cents_to_money(ar_total)],
                 ["Reconciled bank applied amount", cents_to_money(bank_total)],
                 ["Reconciled control difference", cents_to_money(difference)],
+                *summary_rows(controls),
                 ["Output file", self.output_path.name],
             ],
             columns=["Metric", "Value"],
@@ -777,6 +936,7 @@ class ReconciliationService:
             reconciled_ar_total_cents=ar_total,
             reconciled_bank_total_cents=bank_total,
             control_difference_cents=difference,
+            controls=controls,
         )
 
 

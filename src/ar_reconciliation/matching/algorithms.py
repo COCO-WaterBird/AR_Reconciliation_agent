@@ -28,8 +28,8 @@ from ar_reconciliation.core.schema import (
     OUT_MATCHED_BANK_TXN_COL,
 )
 from ar_reconciliation.matching.candidates import is_open_ar_row
-from ar_reconciliation.matching.models import CandidateInvoice, MatchResult
-from ar_reconciliation.matching.subset_sum import find_subset_sum
+from ar_reconciliation.matching.models import AmbiguousMatch, CandidateInvoice, MatchResult
+from ar_reconciliation.matching.subset_sum import find_subset_sums
 from ar_reconciliation.rules.policies import (
     AMOUNT_TOLERANCE_CENTS,
     ENGINE_REVIEW_ONLY_SCENARIOS,
@@ -129,6 +129,9 @@ def find_invoice_reference_match(
                 applied_cents=referenced_total_cents,
                 residual_cents=0,
                 method="Memo Invoice Match - Bank Fee",
+                # The fee was deducted before the AR was cleared at net, so it
+                # is part of the gross amount that is not applied to AR.
+                adjustment_cents=target_gross_cents - referenced_total_cents,
                 note=(
                     f"Memo invoice total equals net cash {cents_to_money(target_net_cents):,.2f}. "
                     f"Clear AR at net {cents_to_money(target_net_cents):,.2f}; "
@@ -167,6 +170,7 @@ def find_invoice_reference_match(
             applied_cents=referenced_total_cents,
             residual_cents=diff_to_gross,
             method="Memo Invoice Match - Rounding",
+            adjustment_cents=diff_to_gross,
             note=f"Small penny rounding variance {cents_to_money(diff_to_gross):,.2f}.",
         )
 
@@ -217,6 +221,7 @@ def find_invoice_reference_match(
                 ar_indexes=[int(i) for i in inv_df.index],
                 applied_cents=referenced_total_cents,
                 residual_cents=diff_to_gross,
+                unapplied_cents=diff_to_gross,
                 method=f"Memo Invoice Match - {scenario}",
                 note=(
                     f"Payment exceeds referenced open AR by "
@@ -234,6 +239,7 @@ def find_invoice_reference_match(
             applied_cents=min(target_gross_cents, referenced_total_cents),
             residual_cents=abs(diff_to_gross),
             method="Memo Invoice Match - Small Residual",
+            unapplied_cents=max(diff_to_gross, 0),
             note=(
                 f"Small residual {cents_to_money(abs(diff_to_gross)):,.2f} "
                 f"requires policy-based write-off review."
@@ -245,11 +251,16 @@ def find_invoice_reference_match(
 
 def find_amount_combination_match(
     candidates_df: pd.DataFrame, target_gross_cents: int
-) -> MatchResult | None:
+) -> MatchResult | AmbiguousMatch | None:
     """
     Match a receipt against a combination of open invoices.
 
-    Used when the memo carries no usable invoice reference.
+    Used when the memo carries no usable invoice reference.  The match is
+    only made when exactly one set of invoices adds up to the receipt.  When
+    two or more sets fit equally well - two invoices of the same amount, or
+    one invoice and a pair that totals the same - there is no evidence for
+    choosing between them, so an :class:`AmbiguousMatch` is returned and the
+    receipt goes to review.
     """
     if candidates_df.empty:
         return None
@@ -269,11 +280,19 @@ def find_amount_combination_match(
         for idx, row in candidates_df.iterrows()
     ]
 
-    matched_indexes = find_subset_sum(
-        candidates, target_gross_cents, AMOUNT_TOLERANCE_CENTS
+    solutions = find_subset_sums(
+        candidates, target_gross_cents, AMOUNT_TOLERANCE_CENTS, limit=2
     )
-    if not matched_indexes:
+    if not solutions:
         return None
+    if len(solutions) > 1:
+        invoice_by_index = {c.ar_index: c.invoice_number for c in candidates}
+        return AmbiguousMatch(
+            alternatives=[
+                [invoice_by_index[i] for i in solution] for solution in solutions
+            ]
+        )
+    matched_indexes = solutions[0]
 
     matched_total = sum(
         int(v) for v in candidates_df.loc[matched_indexes, "__ar_open_amount_cents"]
@@ -282,6 +301,7 @@ def find_amount_combination_match(
         ar_indexes=[int(i) for i in matched_indexes],
         applied_cents=matched_total,
         residual_cents=0,
+        adjustment_cents=target_gross_cents - matched_total,
         method="Customer Currency Amount Combination",
         note=(
             "No usable memo invoice reference; matched by customer, currency, "
@@ -332,17 +352,20 @@ def find_partial_combination_match(
     idx, residual_cents = plausible[0]
     invoice_cents = int(candidates_df.at[idx, "__ar_open_amount_cents"])
 
+    unapplied_cents = 0
     if target_gross_cents < invoice_cents:
         applied_cents = target_gross_cents
         residual_cents = invoice_cents - target_gross_cents
     else:
         applied_cents = invoice_cents
         residual_cents = target_gross_cents - invoice_cents
+        unapplied_cents = residual_cents
 
     return MatchResult(
         ar_indexes=[idx],
         applied_cents=applied_cents,
         residual_cents=residual_cents,
+        unapplied_cents=unapplied_cents,
         method=f"Amount Combination - {scenario}",
         note=(
             f"No exact amount combination for this receipt; applied "

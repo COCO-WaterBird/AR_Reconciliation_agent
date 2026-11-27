@@ -21,10 +21,12 @@ from ar_reconciliation.core.primitives import (
 )
 from ar_reconciliation.core.schema import (
     AR_INVOICE_COL,
+    BANK_ADJUSTMENT_AMOUNT_COL,
     BANK_APPLIED_AMOUNT_TOTAL_COL,
     BANK_PROCESSING_NOTES_COL,
     BANK_RECON_BATCH_ID_COL,
     BANK_TRANSACTION_ID_COL,
+    BANK_UNAPPLIED_AMOUNT_COL,
     BANK_VALUE_DATE_COL,
     OUT_APPLIED_AMOUNT_COL,
     OUT_MATCHED_AMOUNT_COL,
@@ -200,6 +202,15 @@ def apply_match(
     bank_df.at[bank_index, OUT_SUGGESTED_BANK_STATUS_COL] = suggested_bank_status
     bank_df.at[bank_index, BANK_APPLIED_AMOUNT_TOTAL_COL] = cents_to_money(
         result.applied_cents
+    )
+    # The rest of the gross receipt, as the matching branch stated it.  These
+    # are what the cash control checks, so they are written as numbers even
+    # when they are zero.
+    bank_df.at[bank_index, BANK_UNAPPLIED_AMOUNT_COL] = cents_to_money(
+        result.unapplied_cents
+    )
+    bank_df.at[bank_index, BANK_ADJUSTMENT_AMOUNT_COL] = cents_to_money(
+        result.adjustment_cents
     )
     # The source column is deliberately NOT touched: "Status".
 
