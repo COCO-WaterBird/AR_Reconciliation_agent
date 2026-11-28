@@ -20,6 +20,8 @@
 - [Deterministic Reconciliation Engine](#deterministic-reconciliation-engine)
 - [AI Exception Resolution Agent](#ai-exception-resolution-agent)
 - [Human-in-the-Loop Approval](#human-in-the-loop-approval)
+- [Financial Policy Enforcement](#financial-policy-enforcement)
+- [AR Intelligence Review Application](#ar-intelligence-review-application)
 - [Evidence-Based Exception Resolution](#evidence-based-exception-resolution)
 - [Output](#output)
   - [Data Quality Checks](#data-quality-checks)
@@ -65,6 +67,18 @@ explaining exceptions, and recommending next actions.
 The agent never applies cash and never modifies an AR balance on its own. Its
 suggestions are proposals in the report; a human decides what happens next.
 
+The project delivers two things:
+
+- **An Excel reporting package.** It opens on an Executive Dashboard and carries the cash application by currency, the financial controls, exception analysis, AR aging and the full audit trail.
+- **AR Intelligence, a multipage review application.** Finance teams use it to import data, work the exception queue, investigate receipts with their supporting documents and record decisions.
+
+Every decision follows the same order:
+
+1. **Deterministic rules** match what they can prove.
+2. **AI** explains the rest and proposes a resolution.
+3. **Deterministic financial policy** decides whether that proposal may be executed at all.
+4. **A person** approves or rejects it.
+
 The objective is **not** to replace accountants. The objective is to eliminate
 repetitive reconciliation work while maintaining financial accuracy, internal
 controls, and auditability.
@@ -107,7 +121,82 @@ proposal — a recommendation only becomes a match after a human acts on it, and
 the confirmed rule-based matches stay separate from the suggestions in
 separate sheets.
 
-### Evidence-Based Exception Resolution
+### Financial Policy Enforcement
+
+Deterministic financial rules take precedence over AI recommendations.
+`agent/policy.py` evaluates the rules below for each receipt's current
+proposal. They read only deterministic data (memo scenario, AR status,
+amounts), never the recommendation text.
+
+| Rule | Control | Blocks execution when |
+|---|---|---|
+| FP-01 | Customer Identity | an invoice is outside the receipt's customer and currency (third parties only when documented) |
+| FP-02 | Invoice Eligibility | an invoice is disputed, on hold or closed |
+| FP-03 | Hold Restriction | the scenario is hold-only (collector hold, refund, chargeback, credit memo, lockbox batch, and on-account unless a document resolves it) |
+| FP-04 | Currency Consistency | invoice and receipt currencies differ |
+| FP-05 | Amount Conservation | the amount exceeds the receipt's gross amount or the open balance |
+| FP-06 | Duplicate Prevention | the receipt was already applied |
+| FP-07 | Evidence Requirements | linked documents are insufficient or conflicting |
+| FP-08 | Adjustment Authorization | (informational) adjustments that passed validation |
+| FP-09 | Proposal Validation | the proposal failed deterministic validation |
+| FP-10 | Approval Requirement | (informational) a reviewer must approve |
+
+**Example from the sample data:** BTRX-000168 is a Collector Hold on INV-900186.
+
+- AI recommendation: Hold / Escalate.
+- Potential allocation: USD 7,125.00.
+- Authorized allocation: USD 0.00.
+- Execution allowed: No.
+- Required action: obtain an authorized collector hold release.
+
+Before this rule was enforced at approval, an approved proposal on a hold-only
+scenario could have been applied.
+
+---
+
+## AR Intelligence Review Application
+
+```bash
+python -m pip install -r requirements.txt -r requirements-ui.txt
+streamlit run app/review_app.py
+```
+
+| Page | Purpose |
+|---|---|
+| Overview | Executive summary: workflow statuses, KPIs, match vs. review status, cash application by currency, exceptions, controls, management attention |
+| Data Import | Choose *Upload My Files* or *Use Synthetic Sample Data* (exclusive), validate, preview, run once |
+| Reconciliation | Every receipt with its result; views, search, filters, CSV export, detail panel |
+| Exception Workbench | Prioritized queue with search, filters, sorting, batch investigation and export |
+| Exception Investigation | One receipt: bank transaction vs. candidate invoices, evidence, AI analysis (labeled), rule results, final policy decision, review |
+| Evidence Center | Document upload and linking; lifecycle Uploaded → Parsed → Linked → Retrieved → Cited |
+| Financial Controls | Control matrix by currency, transactions blocked by policy, overridden AI proposals |
+| Reports | Excel package and CSV extracts with period and run ID |
+| Audit History | Runs, investigations, validations, decisions and executions |
+| Settings | Reviewer, AI-assisted mode (key never displayed), read-only policy configuration, diagnostics |
+
+![Overview](docs/images/ui/after_02_overview.png)
+
+![Exception Workbench](docs/images/ui/after_04_workbench.png)
+
+![Financial policy decision for a Collector Hold](docs/images/ui/after_06_policy_decision.png)
+
+**Notes**
+- The reconciliation run, uploaded files, selections and filters survive page navigation.
+- Figures are cached by the workbook's modification time, so a decision or an application refreshes them immediately.
+- Document text and memos are HTML-escaped and treated as untrusted input.
+- Errors are shown as plain messages, never as tracebacks.
+- The application covers the review workflow up to the approval write-back; it does not post to an ERP.
+
+**Limitations**
+- **Review workflow:** simulated (self-declared reviewer, no SSO), and Escalate / Modify are not separate actions.
+- **Storage:** each session works in a temporary workspace (download the Excel package to keep results).
+- **AI-assisted investigation:** needs `OPENAI_API_KEY`; otherwise the deterministic analysis is used and labeled.
+
+Before and after screenshots are in [`docs/images/ui/`](docs/images/ui/).
+
+---
+
+## Evidence-Based Exception Resolution
 
 For receipts in Needs Review, a finance user can attach the customer's
 contract, email or remittance advice:
@@ -128,6 +217,26 @@ contract, email or remittance advice:
 
 See [Evidence-Based Exception Resolution](#evidence-based-exception-resolution).
 
+### Financial Policy Enforcement
+
+- One deterministic policy decision per receipt (`agent/policy.py`), with rule results FP-01 to FP-10: customer identity, invoice eligibility, hold restrictions, currency, amount conservation, duplicates, evidence, adjustments, proposal validation and approval
+- An AI proposal that breaks a blocking rule is shown as **AI Recommendation Overridden by Financial Policy**, with its authorized allocation set to zero
+- The approval write-back enforces the same decision, so neither the UI nor an edit in Excel can apply a blocked proposal
+
+### Enterprise Reporting Package
+
+- The workbook opens on an Executive Dashboard: workflow statuses, KPI cards, cash application by currency, control center and management attention
+- Amounts are never added across currencies; a consolidated total requires an FX-rate file
+- Match, Review and Posting status are independent; Match Status is mutually exclusive
+- Exception Analysis, Action & Review Queue, AR Aging & Customer Risk, Control Reconciliation, AI Decision & Evidence, Metric Definitions and Run Metadata sheets
+
+### AR Intelligence Review Application
+
+- A multipage Streamlit application with 10 pages: Overview, Data Import, Reconciliation, Exception Workbench, Exception Investigation, Evidence Center, Financial Controls, Reports, Audit History and Settings
+- Every figure comes from the backend; the UI adds no financial logic
+
+See [AR Intelligence Review Application](#ar-intelligence-review-application).
+
 ### What one run produces
 
 ![Reconciliation run results: receipt outcomes, top AI exception types and control totals](docs/images/results.png)
@@ -136,48 +245,33 @@ See [Evidence-Based Exception Resolution](#evidence-based-exception-resolution).
 
 ## Architecture
 
+```mermaid
+flowchart TD
+    IN["Bank Statement + Open AR (Excel)"] --> ENG["Deterministic matching engine<br/>services/reconciliation.py"]
+    ENG --> MATCH["Matched receipts<br/>result kept, no AI"]
+    ENG --> NR["Needs Review"]
+    DOCS["Supporting documents<br/>contracts, emails, remittances"] --> EV["Evidence: store, parse, extract facts<br/>evidence/"]
+    NR --> AG["AI exception agent<br/>rules backend or LLM - agent/"]
+    EV --> AG
+    AG --> VAL["Deterministic validation<br/>validator.py, resolution.py"]
+    VAL --> POL["Financial policy decision<br/>agent/policy.py"]
+    POL --> HUM["Human review<br/>APPROVE / REJECT / MORE_EVIDENCE"]
+    HUM -->|approved and allowed| APP["Apply once (Resolution ID)<br/>policy re-checked"]
+    MATCH --> CTRL["Controls per currency<br/>services/controls.py"]
+    APP --> CTRL
+    CTRL -->|all tie| REP["Excel reporting package<br/>reporting/"]
+    CTRL -->|break| FAIL["*_FAILED.xlsx diagnostics"]
+    REP --> UI["AR Intelligence review application<br/>app/"]
 ```
-        Bank Statement Excel        AR Open Items Excel
-                      │                       │
-                      └───────────┬───────────┘
-                                  ▼
-                       Data Validation
-                                  │
-                                  ▼
-              Deterministic Matching Engine
-               ├── Invoice Match
-               ├── Customer Match
-               ├── Currency Match
-               ├── Amount Match
-               └── Combination Match
-                                  │
-                 ┌────────────────┴────────────────┐
-                 ▼                                 ▼
-        Confirmed Matches                   AI Exception Agent
-        (rule + evidence)                          │
-                                                    ▼
-                                        Root Cause Analysis
-                                                    │
-                                                    ▼
-                                       Matching Suggestions
-                                                    │
-                                                    ▼
-                                  Reconciliation Results Excel
-```
-
-**The control boundary.** The deterministic engine is the only component that
-can move money. The AI agent analyses, explains and recommends — it never applies a
-reconciliation on its own. Every AI proposal must pass a validator, and it is only
-written back to AR after a human sets `Approval = APPROVE` in the review sheet.
-
-**The output boundary.** Confirmed rule-based matches and AI suggestions are
-reported separately and never merged into one column. The report is the
-deliverable: the agent applies no cash and changes no AR balance on its own.
 
 **The control boundary.** The deterministic engine is the only component that can
-move money. The AI agent analyses, explains and recommends — it never applies a
-reconciliation on its own. Every AI proposal must pass a validator, and it is only
-written back to AR after a human sets `Approval = APPROVE` in the review sheet.
+move money. The AI agent analyzes, explains and recommends; it never applies a
+reconciliation on its own. Every AI proposal must pass the validator and the
+financial policy, and it is written back to AR only after a person approves it.
+
+**The output boundary.** Confirmed rule-based matches and AI suggestions are
+reported separately and never merged into one column, and AI-generated content
+is labeled as such in both the report and the application.
 
 ![Architecture of the reconciliation engine and AI exception agent](docs/images/architecture.png)
 
@@ -192,8 +286,12 @@ business rule can be found in one place:
 | Policies | `rules/` | Thresholds, tolerances, the controlled taxonomies |
 | Decisions | `matching/` | The matching algorithms and their controls |
 | Advice | `agent/`, `llm/` | Context building, prompting, validation, LLM clients |
-| Workflows | `services/` | The reconciliation and approval workflows |
-| I/O | `io/` | Reading, writing and formatting workbooks |
+| Evidence | `evidence/` | Document store, parsers, fact extraction, conflicts |
+| Policy | `agent/policy.py` | The deterministic decision on whether a proposal may be executed |
+| Workflows | `services/`, `agent/workflow.py` | Reconciliation, controls, analysis, decisions, application |
+| Reporting | `reporting/` | Report metrics, aging, exceptions, controls matrix, Excel rendering |
+| I/O | `io/` | Reading, writing, integrity checks and formatting workbooks |
+| Presentation | `app/` | The AR Intelligence review application (UI only) |
 
 A layer may use the layers below it and never the ones above. The rules in
 `rules/policies.py` are the ones a Finance reviewer would audit: every tolerance
@@ -209,6 +307,9 @@ and every exception taxonomy is stated once, with the reason it has that value.
 | Data Processing | Pandas | In use |
 | Excel Processing | OpenPyXL | In use |
 | AI (exception analysis) | OpenAI-compatible chat API | In use, optional |
+| Document parsing | pypdf, Python `email` | In use |
+| Review application | Streamlit, Plotly | In use, optional (`requirements-ui.txt`) |
+| UI screenshots | Playwright | Optional, development only |
 | Version Control | Git | In use |
 
 ---
@@ -219,74 +320,57 @@ and every exception taxonomy is stated once, with the reason it has that value.
 .
 ├── src/ar_reconciliation/         # The library
 │   ├── config.py                   # Project-relative paths and settings
-│   ├── cli.py                      # Console entry points
-│   ├── core/                       # Shared primitives
-│   │   ├── primitives.py           #   Cell parsing, money, text normalisation
-│   │   └── schema.py               #   The column vocabulary
-│   ├── rules/                      # Financial validation rules
-│   │   └── policies.py             #   Thresholds, tolerances, taxonomies
-│   ├── matching/                   # The matching engine
-│   │   ├── models.py               #   CandidateInvoice, MatchResult
-│   │   ├── memo.py                 #   Memo classification
-│   │   ├── subset_sum.py           #   Subset-sum matching
-│   │   ├── candidates.py           #   Eligibility controls
-│   │   ├── algorithms.py           #   The three matching strategies
-│   │   └── application.py          #   Writing a match back to the workbook
+│   ├── cli.py                      # ar-reconcile, ar-agent, ar-evidence
+│   ├── core/                       # primitives.py (money, text), schema.py (columns)
+│   ├── rules/policies.py           # Thresholds, tolerances, taxonomies
+│   ├── matching/                   # The matching engine (memo, subset sum, candidates, application)
 │   ├── agent/                      # The AI exception agent
-│   │   ├── context.py              #   Candidate pool, scoring, context
+│   │   ├── context.py              #   Candidate pool and analysis context (with evidence)
 │   │   ├── prompt.py               #   System prompt and response schema
 │   │   ├── rules_backend.py        #   Offline deterministic backend
-│   │   ├── validator.py            #   Safety validation of recommendations
-│   │   └── exception_agent.py      #   The agent and its CLI
-│   ├── llm/                        # LLM integrations
-│   │   └── backend.py              #   OpenAI-compatible chat backend
-│   ├── services/                   # Reconciliation services
-│   │   ├── reconciliation.py       #   The deterministic workflow
-│   │   └── review_rows.py          #   Building the review-sheet rows
-│   └── io/                         # Workbook I/O
-│       └── workbook.py             #   Validation, preservation, formatting
+│   │   ├── evidence_rules.py       #   Deterministic evidence analysis
+│   │   ├── validator.py            #   Recommendation validation
+│   │   ├── resolution.py           #   Allocation / adjustment validation, Resolution ID
+│   │   ├── policy.py               #   Financial policy decision (FP-01 to FP-10)
+│   │   ├── workflow.py             #   Analyze, record decision, apply
+│   │   └── exception_agent.py      #   The agent, the approval write-back, its CLI
+│   ├── evidence/                   # Supporting documents: store, parsers, extraction, samples
+│   ├── reporting/                  # Enterprise report: metrics, aging, exceptions, controls, Excel
+│   ├── llm/backend.py              # OpenAI-compatible chat backend
+│   ├── services/                   # reconciliation.py, controls.py, review_rows.py
+│   └── io/                         # workbook.py, integrity.py, report_views.py
+├── app/                            # AR Intelligence review application
+│   ├── review_app.py               #   Entry point and navigation
+│   ├── views/                      #   One file per page
+│   ├── ui/                         #   Backend adapter, state, components, theme, formatting, charts
+│   └── assets/                     #   Logo and icon
+├── .streamlit/config.toml          # Application theme and limits
 ├── scripts/                        # Runnable entry points
 │   ├── run_reconciliation.py       #   Run the deterministic engine
-│   ├── run_agent.py                #   Run the AI exception agent
-│   ├── run_openai.py               #   Run the agent against the OpenAI API
-│   ├── run_local_model.py          #   Run the agent against a local model
+│   ├── run_agent.py                #   Run the AI exception agent (and apply approvals)
+│   ├── run_openai.py, run_local_model.py
+│   ├── manage_evidence.py          #   Store, link, extract documents; record decisions
+│   ├── make_sample_evidence.py     #   Regenerate the synthetic documents
 │   ├── show_result.py              #   Inspect the result from the terminal
+│   ├── check_regression.py         #   Compare a run against the baseline
+│   ├── compare_runs.py             #   Compare business results of two runs
 │   ├── make_images.py              #   Regenerate the README images
-│   └── check_regression.py         #   Compare a run against the baseline
+│   └── capture_ui_screenshots.py   #   Capture the application screenshots
 ├── data/
-│   ├── input/                      # Source workbooks (read-only)
-│   │   ├── Bank_Cash_Receipts.xlsx     200 bank receipts
-│   │   └── Open_AR_Detail.xlsx         191 open AR rows
+│   ├── input/                      # Source workbooks (read-only, synthetic)
 │   ├── output/                     # Sample report from the synthetic data (committed)
-│   │   └── Open_AR_Detail_Reconciled_Result.xlsx
-│   ├── sample/                     # The sample dataset
+│   ├── sample/evidence/            # Synthetic supporting documents
 │   └── baseline.json               # Metrics a run must reproduce
-├── .env.example                    # Template for .env (the real .env is gitignored)
-├── tests/                          # pytest suite
-│   ├── conftest.py
-│   ├── test_core.py
-│   ├── test_engine.py
-│   ├── test_agent.py
-│   ├── test_approval_workflow.py
-│   ├── test_env.py
-│   └── test_llm_backend.py
-├── docs/
-│   ├── images/                    #   README images (regenerated by scripts/make_images.py)
-│   ├── data_dictionary.md
-│   ├── reconciliation_logic.md
-│   ├── scenario_coverage.md
-│   ├── ai_exception_agent.md
-│   ├── local_models.md
-│   └── prompt.md
+├── tests/                          # pytest suite (see Testing)
+├── docs/                           # Design notes, data dictionary, metric definitions, images
 ├── .github/workflows/ci.yml        # Continuous integration
-├── pyproject.toml                  # Packaging and tool configuration
-├── .gitignore
-└── README.md
+├── requirements.txt, requirements-dev.txt, requirements-ui.txt
+└── pyproject.toml
 ```
 
 All runnable entry points live in `scripts/`, and all library code lives in
 `src/ar_reconciliation/`. Install the package with `pip install -e .` to get the
-`ar-reconcile` and `ar-agent` console commands.
+`ar-reconcile`, `ar-agent` and `ar-evidence` console commands.
 
 ---
 
@@ -422,12 +506,20 @@ python scripts/manage_evidence.py decide BTRX-000178 APPROVE --reviewer "Your Na
 python scripts/run_agent.py --evidence-dir data/evidence --apply-approved
 ```
 
-Or use the single-page review UI:
+Or do the same in the review application:
 
 ```bash
 python -m pip install -r requirements-ui.txt
 streamlit run app/review_app.py
 ```
+
+Then, in the browser:
+
+1. In **Settings**, enter your reviewer name.
+2. In **Data Import**, choose *Use Synthetic Sample Data* (or upload your two workbooks) and run the reconciliation.
+3. Read the results on the **Overview**.
+4. Investigate from the **Exception Workbench**. Load the sample documents in the **Evidence Center** to see evidence-based resolutions.
+5. Record decisions on the **Exception Investigation** page, apply the approved ones, then check **Financial Controls** and download the package from **Reports**.
 
 The full demo, with the synthetic sample documents, is in
 [docs/evidence_resolution.md](docs/evidence_resolution.md#9-demo).
@@ -472,11 +564,13 @@ guarded by a test.
 | `tests/test_engine_edge_cases.py` | Synthetic edge cases for the engine: ambiguity, duplicates, malformed input, instalments, the cash control and AR roll-forward. |
 | `tests/test_evidence_documents.py` | Document store, PDF/email/Excel/CSV parsing, fact extraction, fabricated-fact rejection, conflicts, prompt-injection detection, masking. |
 | `tests/test_evidence_resolution.py` | Evidence-based resolution end to end on a synthetic engine run, with the rules backend and a mocked LLM: every scenario, approve/reject/more evidence, apply-once, per-currency controls, audit trail, FAILED diagnostics. |
-| `tests/test_review_app.py` | Headless run of the review UI through the whole acceptance path (skipped without Streamlit). |
+| `tests/test_review_app.py` | Headless run of the review UI (skipped without Streamlit). It still targets the previous single-page UI and will be rewritten for the multipage application. |
 | `tests/test_report_views.py` | The report sheets: order, one match status per receipt, amounts tie to the detail sheets. |
 | `tests/test_enterprise_reporting.py` | Multi-currency handling, FX consolidation rules, status separation, denominators, controls per currency, aging boundaries, KPI accuracy, charts, formats, empty/large datasets, formula-injection guard. |
 
-Current result: **286 passed**.
+Last full run: **286 passed** (before the multipage UI). The automated tests for
+the new review application and the policy enforcement are pending the design
+review; see [UI Implementation Status](docs/ui_implementation_status.md).
 
 ### The regression baseline
 
@@ -681,35 +775,28 @@ to downgrade — see [AI Exception Log](#ai-exception-log).
 
 ## Human-in-the-Loop Approval
 
-> **Not part of the MVP scope.** The MVP produces a report; this section
-> describes an optional local path for acting on it. The code works and is
-> useful for a walkthrough, but a hosted approval service is explicitly out of
-> scope — see [Roadmap](#roadmap).
-
 The agent recommends. It does not decide.
 
 ```
-AI recommendation
-        │
-        ▼
-  Human review  ──── Approval = APPROVE ────┐
-        │                                     │
-        │                                     ▼
-        │                            Applied to AR
-        │                                     │
-        └── Approval = REJECT / blank         ▼
-              stays in the queue      Control totals re-verified
+AI recommendation ─► deterministic validation ─► financial policy decision
+                                                        │
+                       execution not allowed ◄──────────┤──────────► execution allowed
+                       (Approve disabled;                │            (Approve enabled)
+                        stays in review)                 ▼
+                                               Human review
+                     APPROVE ─► revalidated + policy re-checked ─► applied once ─► controls re-run
+                     REJECT / MORE_EVIDENCE ─► stays in Needs Review, recorded
 ```
 
-The approval is a hard gate. Nothing is written to AR without it, and the process is
-idempotent (re-running never applies the same receipt twice). The reviewer's
-decisions live in the `AI Exception Review` sheet of the result workbook, which
-the reconciliation engine carries over when it regenerates the workbook, so a
-decision survives a re-run.
+- **Decisions:** reviewers record APPROVE, REJECT or MORE_EVIDENCE, with their name, a timestamp and comments. They use the Exception Investigation page, the `AI Exception Review` sheet or `ar-evidence decide`.
+- **Approval is a hard gate:** nothing is written to AR without it.
+- **Exactly once:** each approved resolution is applied once, tracked by its Resolution ID.
+- **Recorded:** every decision goes to Approval Records, and every balance change to the Audit Trail.
+- **Approve depends on the policy:** it is available only when the financial policy allows execution. The write-back re-checks the same policy, so approving a blocked proposal in Excel is refused too.
+- **Stale approvals are dropped:** an approval is carried over only while the proposal itself is unchanged.
 
-An approval is only carried over while the proposal itself is unchanged. If the
-recommendation moves to a different invoice or a different amount, the stale
-approval is dropped and the row goes back for review.
+The review workflow is a **simulated** one. The reviewer name is self-declared,
+and there is no enterprise sign-in or role-based authorization.
 
 ![The human-in-the-loop approval workflow](docs/images/approval-workflow.png)
 
@@ -906,10 +993,23 @@ same shape.
   approve / reject / request more evidence, apply-once, audit trail
 - Cash completeness and AR roll-forward controls, per currency, with FAILED
   diagnostics on a break
-- Single-page review UI (Streamlit, optional)
+- Enterprise Excel reporting package (Executive Dashboard, per-currency figures,
+  metric definitions, AR aging, control matrix)
+- Deterministic financial policy decision, enforced at approval
+- AR Intelligence multipage review application (Streamlit, optional)
 - Automated test suite covering the matching rules, the AI safety rules and
   the approval gate
 - Continuous integration with a stored regression baseline
+
+**Planned / not implemented**
+
+- A contract master-data table keyed by customer (payment terms, discounts,
+  instalment schedules) applied to every receipt automatically; today
+  contracts are individual documents linked to receipts
+- Mailbox / email API ingestion; today emails are uploaded as `.eml` files
+- An FX rate source for consolidated reporting
+- A persistent, cross-session audit store
+- Enterprise sign-in and role-based approval; Escalate / Modify review actions
 
 **Out of scope for the MVP**
 
@@ -953,7 +1053,10 @@ report for a human to read.
 - [x] Clear separation of confirmed and suggested — rule-based matches and
       AI-suggested matches are reported separately and are never mixed
 - [x] Duplicate-application prevention — a receipt is never applied twice
-- [x] Regression tests — 236 tests and a stored baseline
+- [x] Regression tests — 286 tests and a stored baseline (UI tests pending)
+- [x] Enterprise reporting package with per-currency controls
+- [x] Financial policy enforcement at approval
+- [x] AR Intelligence multipage review application
 - [x] Evidence-based exception resolution — the three steps of the target
       workflow below
 
@@ -1049,6 +1152,8 @@ Potential use cases include:
 - [Reconciliation Logic](docs/reconciliation_logic.md) — matching rules, output statuses, match methods
 - [AI Exception Agent](docs/ai_exception_agent.md) — the agent's design, safety rules and review workflow
 - [Free and Open-Source Model Backends](docs/local_models.md) — running the agent on a free local model
+- [Enterprise UI Redesign Plan](docs/enterprise_ui_redesign_plan.md) — UI review findings, architecture and the policy control gap
+- [UI Implementation Status](docs/ui_implementation_status.md) — page status, backend changes, limitations, next steps
 - [Reporting Architecture](docs/reporting_architecture.md) — enterprise report design, sheet mapping, before/after, limitations
 - [Metric Definitions](docs/metric_definitions.md) — definition, source, formula, denominator and currency treatment of every metric
 - [Evidence-Based Exception Resolution](docs/evidence_resolution.md) — documents, extraction, validation, review, controls, demo, limitations
