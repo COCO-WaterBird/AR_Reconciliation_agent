@@ -1086,8 +1086,8 @@ def write_review_sheet(
         from ar_reconciliation.io.workbook import apply_workbook_formatting
     except ImportError:  # pragma: no cover - only when imported standalone
         return
-    refresh_report_views(result_path)
     apply_workbook_formatting(result_path)
+    refresh_report_views(result_path)
 
 
 def refresh_summary(

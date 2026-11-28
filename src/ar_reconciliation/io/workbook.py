@@ -138,12 +138,13 @@ STATUS_FILLS = {
 FONT_NAME = "Aptos"
 FONT_FALLBACK = "Calibri"
 
-#: Currency, with negatives in parentheses.  This is the format US finance
-#: reporting expects on a reconciliation.
-CURRENCY_FORMAT = '$#,##0.00;($#,##0.00)'
+#: Amounts, with negatives in parentheses and no currency symbol: the
+#: workbook holds USD, CAD and EUR, so the ISO code in each row's Currency
+#: column identifies the currency.
+CURRENCY_FORMAT = '#,##0.00;(#,##0.00)'
 NUMBER_FORMAT = '#,##0.00;(#,##0.00)'
 PERCENT_FORMAT = '0.0%'
-DATE_FORMAT = 'MM/DD/YYYY'
+DATE_FORMAT = 'YYYY-MM-DD'
 
 #: A cell holding an ISO date as text.  Used to recognise a date column
 #: whose header does not say "date" - the Summary sheet's "Value" column
@@ -276,10 +277,6 @@ def apply_workbook_formatting(output_file: Path) -> None:
         "Unmatched Bank Receipts": 2,
         "Data Quality Checks": 2,
         "Summary": 1,
-        "Matched": 1,
-        "Unmatched": 1,
-        "AI Suggested": 1,
-        "Evidence": 1,
         "AI Exception Review": 2,
         "AI Exception Log": 2,
         "Supporting Documents": 2,

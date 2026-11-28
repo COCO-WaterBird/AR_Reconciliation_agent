@@ -137,8 +137,8 @@ def _write_sheets(result_path: Path, sheets: dict[str, pd.DataFrame]) -> None:
     from ar_reconciliation.io.report_views import refresh_report_views
     from ar_reconciliation.io.workbook import apply_workbook_formatting
 
-    refresh_report_views(result_path)
     apply_workbook_formatting(result_path)
+    refresh_report_views(result_path)
 
 
 def _read_sheet(result_path: Path, name: str, columns: list[str]) -> pd.DataFrame:

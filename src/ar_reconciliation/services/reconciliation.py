@@ -850,8 +850,25 @@ class ReconciliationService:
 
         from ar_reconciliation.io.report_views import refresh_report_views
 
-        refresh_report_views(self.output_path)
         apply_workbook_formatting(self.output_path)
+        refresh_report_views(self.output_path)
+
+    def _run_identity_rows(self) -> list[list[object]]:
+        """Run timestamp and input-file fingerprints, for the run metadata."""
+        import hashlib
+        from datetime import datetime, timezone
+
+        rows: list[list[object]] = [
+            ["Run Timestamp (UTC)", datetime.now(timezone.utc).replace(microsecond=0).isoformat()],
+        ]
+        for label, path in (("Bank", self.bank_path), ("AR", self.ar_path)):
+            path = Path(path)
+            rows.append([f"{label} Input File", path.name])
+            try:
+                rows.append([f"{label} Input SHA-256", hashlib.sha256(path.read_bytes()).hexdigest()])
+            except OSError:
+                rows.append([f"{label} Input SHA-256", "Not available"])
+        return rows
 
     def _write_failed_diagnostics(
         self,
@@ -946,6 +963,13 @@ class ReconciliationService:
                 ["Reconciled control difference", cents_to_money(difference)],
                 *summary_rows(controls),
                 ["Output file", self.output_path.name],
+                *self._run_identity_rows(),
+                [
+                    "Note",
+                    "All-currency lines are arithmetic sums of original-currency amounts "
+                    "(not FX-converted) kept for control arithmetic; use the per-currency "
+                    "lines or the Executive Dashboard for reporting.",
+                ],
             ],
             columns=["Metric", "Value"],
         )

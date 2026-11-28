@@ -1,0 +1,41 @@
+{
+  "_comment": "Reporting thresholds and settings. Amounts are in each currency's own units and are never converted. Change values here, not in code.",
+  "as_of_date": null,
+  "as_of_default": "latest_bank_posting_date",
+  "reporting_currency": null,
+  "fx_rates_file": null,
+  "aging_buckets": [
+    {"label": "Current / Not Due", "min_days": null, "max_days": 0},
+    {"label": "1-30 Days Past Due", "min_days": 1, "max_days": 30},
+    {"label": "31-60 Days Past Due", "min_days": 31, "max_days": 60},
+    {"label": "61-90 Days Past Due", "min_days": 61, "max_days": 90},
+    {"label": "91-120 Days Past Due", "min_days": 91, "max_days": 120},
+    {"label": "Over 120 Days Past Due", "min_days": 121, "max_days": null}
+  ],
+  "materiality": {
+    "default": {"large_receipt": 5000, "material_balance": 10000, "high_priority_amount": 7500, "medium_priority_amount": 2500},
+    "USD": {"large_receipt": 5000, "material_balance": 10000, "high_priority_amount": 7500, "medium_priority_amount": 2500},
+    "CAD": {"large_receipt": 6500, "material_balance": 13000, "high_priority_amount": 10000, "medium_priority_amount": 3500},
+    "EUR": {"large_receipt": 4500, "material_balance": 9000, "high_priority_amount": 7000, "medium_priority_amount": 2300}
+  },
+  "cash_application_rate_warning": 0.80,
+  "high_priority_categories": ["Duplicate Review", "Dispute Payment", "Reversal / Chargeback", "Unexpected Bank Account", "Wrong Customer or Legal Entity"],
+  "missing_remittance_categories": ["No Memo", "On-account / Unapplied", "Lockbox Batch"],
+  "duplicate_categories": ["Duplicate Review"],
+  "customer_risk": {
+    "high_over_90_amount": 5000,
+    "high_overdue_ratio": 0.50,
+    "medium_overdue_amount": 1,
+    "_note": "Operational prioritization for follow-up, not a credit rating. Amount thresholds are in the customer's invoice currency."
+  },
+  "teams": {
+    "controls": "Controllership",
+    "cash_application": "Cash Application",
+    "collections": "Collections / Credit",
+    "treasury": "Treasury",
+    "master_data": "AR Master Data",
+    "disputes": "Dispute Management"
+  },
+  "attention_reference_limit": 8,
+  "top_customers": 10
+}
