@@ -1,0 +1,12 @@
+remittance_id,payment_reference,bank_transaction_id,payer_name,customer_id,payment_date,currency,invoice_number,amount_paid,deduction_amount,deduction_code,deduction_reason
+RA-1001,REF31516757,,Maple Leaf Packaging CA,CUST-1020,2026-06-04,USD,INV-900134,5000.00,,,
+RA-1002,REF99903592,,Meridian Office Supply,CUST-1022,2026-06-24,USD,INV-900137,5000.00,,,
+RA-1002,REF99903592,,Meridian Office Supply,CUST-1022,2026-06-24,USD,INV-900138,3650.00,,,
+RA-1003,REF28176954,,Horizon Telecom Services,CUST-1012,2026-06-02,USD,INV-900172,1675.00,,,
+RA-1004,REF94457912,,BrightPath Education Inc.,CUST-1015,2026-06-04,USD,INV-900175,8123.75,251.25,WHT,Withholding tax 3%
+RA-1005,REF29585415,,Northstar Retail Group Inc.,CUST-1002,2026-06-14,USD,INV-900194,5550.00,1575.00,PROMO,Promotional allowance
+RA-1006,,BTRX-000123,Union Ridge Mining Co.,CUST-1021,2026-06-08,USD,INV-900136,6200.00,,,
+RA-1007,,BTRX-000123,Union Ridge Mining Co.,CUST-1021,2026-06-08,USD,INV-900135,6200.00,,,
+RA-1008,REF31516757,,Maple Leaf Packaging CA,CUST-1020,2026-06-04,USD,INV-900134,5000.00,,,
+RA-1009,,BTRX-000191,Cascade Industrial Supply - West,CUST-1031,2026-06-08,USD,INV-900190,2375.00,,,
+RA-1010,,BTRX-000168,Northeast Robotics Inc.,CUST-1025,2026-06-01,USD,INV-900186,7125.00,,,

@@ -1,0 +1,5 @@
+contract_id,customer_id,invoice_number,installment_number,installment_count,due_date,installment_amount,currency,allowed_deduction_codes,max_deduction_pct
+SC-2026-011,CUST-1011,INV-900120,1,2,2026-06-14,1700.00,USD,,
+SC-2026-011,CUST-1011,INV-900120,2,2,2026-07-14,1000.00,USD,,
+SC-2026-015,CUST-1015,INV-900175,1,1,2026-06-06,8375.00,USD,WHT,3
+SC-2026-002,CUST-1002,INV-900194,1,1,2026-04-15,7125.00,USD,WHT;FREIGHT,2

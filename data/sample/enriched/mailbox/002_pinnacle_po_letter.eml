@@ -1,0 +1,35 @@
+From: payables@pinnacle-aerospace.example
+To: ar@example-company.example
+Date: Mon, 22 Jun 2026 09:00:00 -0400
+Subject: Remittance - PO-550000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="===============7917499178062727557=="
+
+--===============7917499178062727557==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Please find our remittance advice attached.
+
+--===============7917499178062727557==
+Content-Type: application/pdf
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="remittance_PO-550000.pdf"
+MIME-Version: 1.0
+
+JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2Jq
+CjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFs1IDAgUl0gL0NvdW50IDEgPj4KZW5kb2Jq
+CjMgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0
+aWNhID4+CmVuZG9iago0IDAgb2JqCjw8IC9MZW5ndGggMjMxID4+CnN0cmVhbQpCVAovRjEgMTAg
+VGYKMTQgVEwKNTAgNzkwIFRkCihQaW5uYWNsZSBBZXJvc3BhY2UgTExDIC0gUmVtaXR0YW5jZSBB
+ZHZpY2UpIFRqIFQqCihQdXJjaGFzZSBvcmRlciBQTy01NTAwMDApIFRqIFQqCihUaGlzIHBheW1l
+bnQgc2V0dGxlcyBpbnZvaWNlIElOVi05MDAxNTYuKSBUaiBUKgooQW1vdW50IHBhaWQ6IFVTRCAy
+LDQwMC4wMCkgVGogVCoKKFBheW1lbnQgZGF0ZTogMjAyNi0wNi0yMikgVGogVCoKRVQKZW5kc3Ry
+ZWFtCmVuZG9iago1IDAgb2JqCjw8IC9UeXBlIC9QYWdlIC9QYXJlbnQgMiAwIFIgL01lZGlhQm94
+IFswIDAgNjEyIDg0Ml0gL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgMyAwIFIgPj4gPj4gL0Nv
+bnRlbnRzIDQgMCBSID4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAw
+MDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAwIG4gCjAw
+MDAwMDAxODUgMDAwMDAgbiAKMDAwMDAwMDQ2NyAwMDAwMCBuIAp0cmFpbGVyCjw8IC9TaXplIDYg
+L1Jvb3QgMSAwIFIgPj4Kc3RhcnR4cmVmCjU5MwolJUVPRgo=
+
+--===============7917499178062727557==--

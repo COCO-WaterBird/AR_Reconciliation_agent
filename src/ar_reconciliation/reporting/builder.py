@@ -118,6 +118,7 @@ def _cash_results(statuses: pd.DataFrame, ar: pd.DataFrame) -> pd.DataFrame:
         "Posting Status": statuses["Posting Status"],
         "Settled By": statuses["Settled By"],
         "Match Method": statuses["Match Method"],
+        "Evidence Source": statuses["Evidence Source"],
         "Resolution ID": statuses["Resolution ID"],
     })
     return frame

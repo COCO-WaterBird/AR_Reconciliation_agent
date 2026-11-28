@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ar_reconciliation.core.primitives import cents_to_money, normalize_text
+from ar_reconciliation.core.primitives import cents_to_money, normalize_invoice, normalize_text
 from ar_reconciliation.core.schema import (
     AR_DUE_DATE_COL,
     AR_INVOICE_COL,
@@ -373,3 +373,66 @@ def find_partial_combination_match(
             f"with a residual of {cents_to_money(residual_cents):,.2f} requiring review."
         ),
     )
+
+
+def find_structured_allocation_match(
+    ar_df: pd.DataFrame,
+    allocations: list[tuple[str, int]],
+    customer_key: str,
+    currency_key: str,
+    target_gross_cents: int,
+    source_type: str,
+    sources: list[str],
+    has_deductions: bool = False,
+    alt_customer_keys: tuple[str, ...] = (),
+) -> MatchResult | str:
+    """
+    Apply a split stated by a structured source (remittance advice, contract).
+
+    Every invoice must be open AR of the receipt's customer and currency
+    (the same eligibility as every other match), each amount may not exceed
+    the invoice's open balance, and the amounts must add up to the gross
+    receipt.  Returns the match, or the reason it cannot be applied.
+    """
+    from ar_reconciliation.matching.candidates import build_candidate_mask
+
+    if not allocations:
+        return "The structured source states no allocation."
+    mask = build_candidate_mask(ar_df, customer_key, currency_key, alt_customer_keys)
+    invoice_keys = ar_df[AR_INVOICE_COL].apply(normalize_invoice)
+    indexes: list[int] = []
+    amounts: list[int] = []
+    partial = False
+    for invoice, cents in allocations:
+        rows = ar_df.index[mask & (invoice_keys == normalize_invoice(invoice))]
+        if len(rows) != 1:
+            return f"{invoice} is not open AR of this customer and currency."
+        idx = int(rows[0])
+        open_cents = int(ar_df.at[idx, "__ar_open_amount_cents"])
+        if cents <= 0 or cents > open_cents:
+            return (f"{source_type} allocates {cents / 100:,.2f} to {invoice}, which has "
+                    f"{open_cents / 100:,.2f} open.")
+        if idx in indexes:
+            return f"{invoice} is allocated twice."
+        indexes.append(idx)
+        amounts.append(cents)
+        partial = partial or cents < open_cents
+    total = sum(amounts)
+    if total != target_gross_cents:
+        return (f"{source_type} allocations total {total / 100:,.2f}, not the receipt's "
+                f"{target_gross_cents / 100:,.2f}.")
+    method = "Remittance Advice Allocation" if source_type == "Remittance Advice" else "Contract Installment Schedule"
+    if has_deductions:
+        method += " - Deduction Pending"
+    elif partial:
+        method += " - Partial"
+    residual = sum(int(ar_df.at[i, "__ar_open_amount_cents"]) - a for i, a in zip(indexes, amounts))
+    return MatchResult(
+        ar_indexes=indexes,
+        applied_cents=total,
+        residual_cents=residual,
+        method=method,
+        note=f"Allocation stated by {source_type}: {', '.join(sources)}.",
+        allocations=tuple(amounts),
+    )
+

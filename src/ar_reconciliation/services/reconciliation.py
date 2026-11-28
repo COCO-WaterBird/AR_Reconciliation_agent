@@ -88,6 +88,7 @@ from ar_reconciliation.io.workbook import (
 from ar_reconciliation.matching.algorithms import (
     find_amount_combination_match,
     find_invoice_reference_match,
+    find_structured_allocation_match,
     find_partial_combination_match,
 )
 from ar_reconciliation.matching.application import apply_match, build_payment_signature
@@ -106,6 +107,7 @@ from ar_reconciliation.rules.policies import (
     ENGINE_REVIEW_ONLY_SCENARIOS,
     ENGINE_REVIEW_ONLY_SCENARIOS as REVIEW_ONLY_SCENARIOS,
     NAME_FALLBACK_SCENARIOS,
+    STRUCTURED_BLOCKED_SCENARIOS,
     UNRESTRICTED_PARTIAL_SCENARIOS,
 )
 from ar_reconciliation.services.controls import (
@@ -186,7 +188,12 @@ class ReconciliationService:
         bank_path: Path | None = None,
         ar_path: Path | None = None,
         output_path: Path | None = None,
+        enrichment_inputs: Any | None = None,
     ) -> None:
+        #: Optional structured inputs (Customer Master, Contract Schedule,
+        #: Remittance Advice).  ``None`` keeps the two-input workflow exactly
+        #: as it was.
+        self.enrichment_inputs = enrichment_inputs
         self.bank_path = Path(bank_path) if bank_path is not None else BANK_FILE
         self.ar_path = Path(ar_path) if ar_path is not None else AR_FILE
         self.output_path = (
@@ -430,6 +437,7 @@ class ReconciliationService:
         self,
         ar_df: pd.DataFrame,
         bank_df: pd.DataFrame,
+        enrichment: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         Match every receipt against the open AR.
@@ -442,6 +450,9 @@ class ReconciliationService:
         matched_receipt_count = 0
         matched_invoice_count = 0
         pending_review_count = 0
+        deduction_rows: list[dict[str, object]] = []
+        if enrichment is not None:
+            ensure_output_columns(bank_df, [EVIDENCE_SOURCE_COL, STRUCTURED_EVIDENCE_COL])
 
         bank_df = self.order_receipts(bank_df)
 
@@ -462,6 +473,11 @@ class ReconciliationService:
             scenario = normalize_text(bank_row[OUT_MEMO_SCENARIO_COL])
             invoice_numbers = extract_invoice_numbers(bank_row[BANK_MEMO_COL])
             extracted_invoices = ", ".join(invoice_numbers)
+            enr = (
+                enrichment.get(normalize_key(bank_row[BANK_TRANSACTION_ID_COL]))
+                if enrichment
+                else None
+            )
 
             payment_signature = build_payment_signature(
                 customer_key=bank_row["__customer_key"],
@@ -478,6 +494,12 @@ class ReconciliationService:
             alt_customer_keys = build_name_fallback_keys(ar_df, bank_row)
             customer_key = bank_row["__customer_key"]
             currency_key = bank_row["__currency_key"]
+            if enr is not None:
+                _record_evidence(bank_df, bank_index, enr)
+                if enr.resolved_customer_key:
+                    # Customer Master resolved a missing or misstated customer
+                    # ID to exactly one customer in this currency (G3).
+                    customer_key = enr.resolved_customer_key
             ar_mask = build_candidate_mask(
                 ar_df, customer_key, currency_key, alt_customer_keys
             )
@@ -562,6 +584,75 @@ class ReconciliationService:
                     candidate_info=candidate_info,
                 )
                 pending_review_count += 1
+                continue
+
+            # --- Structured evidence (decision G2) ------------------------
+            # A remittance advice or contract instalment that states the split
+            # is applied before the memo-based strategies - unless the memo
+            # scenario needs an accounting decision no remittance can settle.
+            if (
+                enr is not None
+                and (enr.allocations or enr.conflicts)
+                and scenario not in STRUCTURED_BLOCKED_SCENARIOS
+            ):
+                if enr.conflicts:
+                    route_to_review(
+                        bank_df=bank_df,
+                        bank_index=bank_index,
+                        bank_row=bank_row,
+                        reason="Structured evidence conflict: " + " ".join(enr.conflicts)
+                        + " Not applied automatically.",
+                        unmatched_rows=unmatched_bank_rows,
+                        scenario=scenario,
+                        extracted_invoices=extracted_invoices,
+                        candidate_info=candidate_info,
+                    )
+                    pending_review_count += 1
+                    continue
+                structured = find_structured_allocation_match(
+                    ar_df=ar_df,
+                    allocations=enr.allocations,
+                    customer_key=customer_key,
+                    currency_key=currency_key,
+                    target_gross_cents=target_gross_cents,
+                    source_type=enr.source_type,
+                    sources=enr.sources,
+                    has_deductions=bool(enr.deductions),
+                    alt_customer_keys=alt_customer_keys,
+                )
+                if isinstance(structured, str):
+                    route_to_review(
+                        bank_df=bank_df,
+                        bank_index=bank_index,
+                        bank_row=bank_row,
+                        reason=f"{enr.source_type} could not be applied: {structured}",
+                        unmatched_rows=unmatched_bank_rows,
+                        scenario=scenario,
+                        extracted_invoices=extracted_invoices,
+                        candidate_info=candidate_info,
+                    )
+                    pending_review_count += 1
+                    continue
+                receipt_added, invoice_added = apply_match(
+                    ar_df=ar_df,
+                    bank_df=bank_df,
+                    bank_index=bank_index,
+                    bank_row=bank_row,
+                    result=structured,
+                    currency_key=currency_key,
+                    close_invoice=structured.residual_cents == 0 and not enr.deductions,
+                )
+                matched_receipt_count += receipt_added
+                matched_invoice_count += invoice_added
+                if payment_signature is not None:
+                    processed_payment_signatures[payment_signature] = normalize_text(
+                        bank_row[BANK_TRANSACTION_ID_COL]
+                    )
+                for deduction in enr.deductions:
+                    # Never applied by the engine (G1): a reviewer decides.
+                    deduction_rows.append(_deduction_row(bank_row, deduction))
+                if enr.deductions or structured.residual_cents:
+                    pending_review_count += 1
                 continue
 
             if (
@@ -725,6 +816,7 @@ class ReconciliationService:
             "matched_receipt_count": matched_receipt_count,
             "matched_invoice_count": matched_invoice_count,
             "pending_review_count": pending_review_count,
+            "deduction_rows": deduction_rows,
         }
 
     # -- Control totals ----------------------------------------------------
@@ -924,7 +1016,19 @@ class ReconciliationService:
         if verbose:
             print("Starting reconciliation...")
 
-        outcome = self.reconcile(ar_df=ar_df, bank_df=bank_df)
+        enrichment = None
+        inputs = self.enrichment_inputs
+        if inputs is not None and not inputs.empty:
+            from ar_reconciliation.enrichment import build_enrichment
+
+            enrichment = build_enrichment(bank_df, ar_df, inputs)
+        outcome = self.reconcile(ar_df=ar_df, bank_df=bank_df, enrichment=enrichment)
+        if inputs is not None:
+            outcome["data_quality_rows"].extend(
+                {"Issue": f"{i['Issue']} (row {i['Row']})" if i.get("Row") else i["Issue"],
+                 "Source": f"{i['Source']} ({i['File']})", "Recommendation": "Correct the structured input and re-run."}
+                for i in inputs.issues
+            )
 
         ar_df = outcome["ar_df"]
         bank_df = outcome["bank_df"]
@@ -988,6 +1092,11 @@ class ReconciliationService:
             data_quality_rows=data_quality_rows,
             summary_df=summary_df,
         )
+        if inputs is not None:
+            frames[DEDUCTIONS_SHEET] = _carry_deduction_decisions(
+                self.output_path, pd.DataFrame(outcome["deduction_rows"], columns=DEDUCTION_COLUMNS)
+            )
+            frames[SOURCES_SHEET] = _sources_frame(inputs, enrichment or {}, bank_df)
         self.write_workbook(frames)
 
         if verbose:
@@ -1012,9 +1121,90 @@ def run_reconciliation(
     ar_path: Path | None = None,
     output_path: Path | None = None,
     verbose: bool = True,
+    enrichment_inputs: Any | None = None,
 ) -> ReconciliationResult:
     """Run the deterministic reconciliation with the default paths."""
     service = ReconciliationService(
-        bank_path=bank_path, ar_path=ar_path, output_path=output_path
+        bank_path=bank_path, ar_path=ar_path, output_path=output_path,
+        enrichment_inputs=enrichment_inputs,
     )
     return service.run(verbose=verbose)
+
+
+# ---------------------------------------------------------------------------
+# Structured evidence helpers
+# ---------------------------------------------------------------------------
+
+EVIDENCE_SOURCE_COL = "Evidence Source"
+STRUCTURED_EVIDENCE_COL = "Structured Evidence"
+DEDUCTIONS_SHEET = "Proposed Deductions"
+SOURCES_SHEET = "Data Sources & Enrichment"
+DEDUCTION_COLUMNS = [
+    "Deduction ID", "Bank Transaction ID", "Customer Name", "Invoice Number", "Currency",
+    "Deduction Amount", "Deduction Code", "Deduction Reason", "Authorization", "Authorization Rule",
+    "Source", "Decision", "Reviewer", "Decision Timestamp", "Reviewer Notes", "Applied",
+]
+
+
+def _record_evidence(bank_df: pd.DataFrame, bank_index: Any, enr: Any) -> None:
+    parts = list(enr.sources) + ([enr.customer_note] if enr.customer_note else []) + list(enr.notes)
+    parts += [f"Conflict: {c}" for c in enr.conflicts]
+    source = enr.source_type or ("Customer Master" if enr.resolved_customer_key else "")
+    if enr.source_type and enr.resolved_customer_key:
+        source += " + Customer Master"
+    bank_df.at[bank_index, EVIDENCE_SOURCE_COL] = source
+    bank_df.at[bank_index, STRUCTURED_EVIDENCE_COL] = "; ".join(p for p in parts if p)
+
+
+def _deduction_row(bank_row: pd.Series, deduction: Any) -> dict[str, object]:
+    return {
+        "Deduction ID": f"DED-{normalize_text(bank_row[BANK_TRANSACTION_ID_COL])}-{deduction.invoice}",
+        "Bank Transaction ID": normalize_text(bank_row[BANK_TRANSACTION_ID_COL]),
+        "Customer Name": normalize_text(bank_row.get(BANK_CUSTOMER_NAME_COL, "")),
+        "Invoice Number": deduction.invoice,
+        "Currency": normalize_text(bank_row.get(BANK_CURRENCY_COL, "")).upper(),
+        "Deduction Amount": cents_to_money(deduction.amount_cents),
+        "Deduction Code": deduction.code,
+        "Deduction Reason": deduction.reason,
+        "Authorization": deduction.authorization,
+        "Authorization Rule": deduction.rule,
+        "Source": deduction.source,
+        "Decision": "", "Reviewer": "", "Decision Timestamp": "", "Reviewer Notes": "", "Applied": "No",
+    }
+
+
+def _carry_deduction_decisions(output_path: Path, frame: pd.DataFrame) -> pd.DataFrame:
+    """Keep reviewer decisions on unchanged deductions when the engine re-runs."""
+    if not output_path.exists() or frame.empty:
+        return frame
+    try:
+        old = pd.read_excel(output_path, sheet_name=DEDUCTIONS_SHEET)
+    except Exception:
+        return frame
+    keep = ["Decision", "Reviewer", "Decision Timestamp", "Reviewer Notes"]
+    previous = {
+        (normalize_text(r["Deduction ID"]), money_to_cents(r["Deduction Amount"])): r
+        for _, r in old.iterrows()
+        if normalize_text(r.get("Applied", "")) != "Yes"
+    }
+    frame = frame.astype(object)
+    for index, row in frame.iterrows():
+        match = previous.get((row["Deduction ID"], money_to_cents(row["Deduction Amount"])))
+        if match is not None:
+            for column in keep:
+                frame.at[index, column] = "" if pd.isna(match.get(column)) else match.get(column)
+    return frame
+
+
+def _sources_frame(inputs: Any, enrichment: dict, bank_df: pd.DataFrame) -> pd.DataFrame:
+    rows = [
+        {"Input": "Bank Statement", "File": "", "Rows": len(bank_df), "Rows Used": len(bank_df), "Status": "Valid"},
+    ]
+    rows += list(inputs.sources)
+    used = [e for e in enrichment.values() if e.allocations or e.resolved_customer_key or e.conflicts]
+    rows.append({"Input": "Receipts with structured evidence", "File": "", "Rows": len(used),
+                 "Rows Used": sum(1 for e in used if e.has_allocation), "Status": "Allocations stated"})
+    rows.append({"Input": "Receipts with evidence conflicts", "File": "",
+                 "Rows": sum(1 for e in used if e.conflicts), "Rows Used": 0, "Status": "Routed to review"})
+    return pd.DataFrame(rows, columns=["Input", "File", "Rows", "Rows Used", "Status"])
+
