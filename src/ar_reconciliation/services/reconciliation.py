@@ -116,6 +116,32 @@ from ar_reconciliation.services.controls import (
     summary_rows,
 )
 
+#: Columns each source workbook must have (also used by the review UI to
+#: validate an upload before a run).
+BANK_REQUIRED_COLUMNS = [
+    BANK_TRANSACTION_ID_COL,
+    BANK_VALUE_DATE_COL,
+    BANK_CUSTOMER_NAME_COL,
+    BANK_CUSTOMER_ID_COL,
+    BANK_CURRENCY_COL,
+    BANK_GROSS_AMOUNT_COL,
+    BANK_FEES_COL,
+    BANK_NET_AMOUNT_COL,
+    BANK_STATUS_COL,
+    BANK_MEMO_COL,
+]
+AR_REQUIRED_COLUMNS = [
+    AR_CUSTOMER_ID_COL,
+    AR_CUSTOMER_NAME_COL,
+    AR_INVOICE_COL,
+    AR_INVOICE_DATE_COL,
+    AR_DUE_DATE_COL,
+    AR_CURRENCY_COL,
+    AR_OPEN_AMOUNT_COL,
+    AR_STATUS_COL,
+    AR_RECON_STATUS_COL,
+]
+
 #: The scenarios the engine refuses to auto-reconcile.  Re-exported under the
 #: original name so existing callers keep working.
 __all__ = [
@@ -174,37 +200,8 @@ class ReconciliationService:
         bank_df = pd.read_excel(self.bank_path, sheet_name=BANK_SHEET)
         ar_df = pd.read_excel(self.ar_path, sheet_name=AR_SHEET)
 
-        require_columns(
-            bank_df,
-            [
-                BANK_TRANSACTION_ID_COL,
-                BANK_VALUE_DATE_COL,
-                BANK_CUSTOMER_NAME_COL,
-                BANK_CUSTOMER_ID_COL,
-                BANK_CURRENCY_COL,
-                BANK_GROSS_AMOUNT_COL,
-                BANK_FEES_COL,
-                BANK_NET_AMOUNT_COL,
-                BANK_STATUS_COL,
-                BANK_MEMO_COL,
-            ],
-            self.bank_path.name,
-        )
-        require_columns(
-            ar_df,
-            [
-                AR_CUSTOMER_ID_COL,
-                AR_CUSTOMER_NAME_COL,
-                AR_INVOICE_COL,
-                AR_INVOICE_DATE_COL,
-                AR_DUE_DATE_COL,
-                AR_CURRENCY_COL,
-                AR_OPEN_AMOUNT_COL,
-                AR_STATUS_COL,
-                AR_RECON_STATUS_COL,
-            ],
-            self.ar_path.name,
-        )
+        require_columns(bank_df, BANK_REQUIRED_COLUMNS, self.bank_path.name)
+        require_columns(ar_df, AR_REQUIRED_COLUMNS, self.ar_path.name)
 
         return bank_df, ar_df
 

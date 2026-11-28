@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="260" height="44" viewBox="0 0 260 44">
+  <rect x="0" y="4" width="36" height="36" rx="8" fill="#287E86"/>
+  <path d="M10 30 L18 12 L26 30 M13.5 23 H22.5" stroke="#FFFFFF" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="48" y="21" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="800" fill="#FFFFFF" letter-spacing="1.2">AR INTELLIGENCE</text>
+  <text x="48" y="36" font-family="Inter, Arial, sans-serif" font-size="10.5" fill="#9FB3C8">Reconciliation &amp; Financial Intelligence</text>
+</svg>
