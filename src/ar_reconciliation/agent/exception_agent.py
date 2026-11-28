@@ -337,12 +337,18 @@ def apply_approved_recommendations(
         # recommendation cell says.
         from ar_reconciliation.agent.policy import evaluate_policy
 
+        # Only the restrictions the checks below do not already cover are
+        # enforced here (invoice holds and disputes, hold-only scenarios); the
+        # customer, currency, cash-cap and duplicate checks keep their own
+        # messages further down.
         policy = evaluate_policy(context, row)
-        if policy.blocking_reasons:
+        holds = [r for r in policy.rules if r.result == "FAIL" and r.rule_id in {"FP-02", "FP-03"}]
+        if holds:
             record(
                 txn_id,
                 "Rejected",
-                "Blocked by financial policy: " + "; ".join(policy.blocking_reasons)
+                "Blocked by financial policy: "
+                + "; ".join(f"{r.control}: {r.explanation}" for r in holds)
                 + f" Required action: {policy.required_action}.",
             )
             continue
