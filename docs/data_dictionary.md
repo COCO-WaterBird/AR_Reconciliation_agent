@@ -112,17 +112,17 @@ The script may add or update the following columns in the reconciled AR output:
 
 The automation creates a new workbook instead of overwriting the source files.
 
-**Report sheets (first, navy tabs).** `Summary`, `Matched`, `Unmatched`,
-`AI Suggested` and `Evidence` are rebuilt from the detail sheets below every
-time the workbook is written (decision D6). Every receipt is in exactly one of
-`Matched` (cash applied, or already reconciled in source) and `Unmatched`
-(still in Needs Review). `AI Suggested` lists proposals awaiting a decision
-and is read-only; decisions are recorded in `AI Exception Review`. `Evidence`
-has one row per piece of evidence: `Matching rule`, `Document fact` or
-`Reviewer decision`, with its source, detail, amount, location and quote.
+**Report sheets.** The enterprise report sheets (Executive Dashboard, AR
+Aging & Customer Risk, Exception Analysis, Action & Review Queue, Cash
+Application Results, Control Reconciliation, AI Decision & Evidence, Metric
+Definitions, Run Metadata & Configuration) are rebuilt from the sheets below
+every time the workbook is written. Their layout, metrics and statuses are
+documented in [reporting_architecture.md](reporting_architecture.md) and
+[metric_definitions.md](metric_definitions.md). Report detail sheets have a
+title, a subtitle and a navigation row; their table header is row 4.
 
-**Appendix (grey tabs).** The sheets below are the system of record and keep
-their names and columns.
+**System-of-record sheets.** The sheets below keep their names and columns;
+the engine, the agent, the controls and the tests read them.
 
 | Sheet Name | Description |
 |---|---|

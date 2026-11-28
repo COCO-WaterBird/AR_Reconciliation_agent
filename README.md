@@ -473,8 +473,10 @@ guarded by a test.
 | `tests/test_evidence_documents.py` | Document store, PDF/email/Excel/CSV parsing, fact extraction, fabricated-fact rejection, conflicts, prompt-injection detection, masking. |
 | `tests/test_evidence_resolution.py` | Evidence-based resolution end to end on a synthetic engine run, with the rules backend and a mocked LLM: every scenario, approve/reject/more evidence, apply-once, per-currency controls, audit trail, FAILED diagnostics. |
 | `tests/test_review_app.py` | Headless run of the review UI through the whole acceptance path (skipped without Streamlit). |
+| `tests/test_report_views.py` | The report sheets: order, one match status per receipt, amounts tie to the detail sheets. |
+| `tests/test_enterprise_reporting.py` | Multi-currency handling, FX consolidation rules, status separation, denominators, controls per currency, aging boundaries, KPI accuracy, charts, formats, empty/large datasets, formula-injection guard. |
 
-Current result: **236 passed**.
+Current result: **286 passed**.
 
 ### The regression baseline
 
@@ -756,33 +758,31 @@ files.
 
 ### `Open_AR_Detail_Reconciled_Result.xlsx`
 
-The workbook opens on **five report sheets** (navy tabs). They are views
-rebuilt from the detail sheets every time the workbook is written, so they
-can never disagree with the data; every receipt appears in exactly one of
-Matched and Unmatched.
+The workbook is an enterprise reporting package for the CFO, the AR manager,
+the controller and the auditor. Its report sheets are rebuilt from the
+system-of-record sheets every time the workbook is written, so they always
+agree with the data. **Amounts are never added across currencies**: every
+amount is shown with its ISO currency code, and a consolidated total appears
+only when an FX-rate file (rate, date, source) is supplied.
 
-| Report sheet | Purpose |
-|---|---|
-| Summary | Run status, counts, cash control and AR roll-forward (also per currency), AI-assisted totals. |
-| Matched | Every receipt whose cash was applied or that was already reconciled in the source: invoices, applied / unapplied / fee amounts, match method, and whether the engine or an approved AI resolution settled it. |
-| Unmatched | Every receipt still in Needs Review: amount held, memo, reason, suggested invoices, the AI's recommendation and the current decision. |
-| AI Suggested | AI proposals waiting for a decision: allocations, adjustments, validation result, evidence sufficiency, explanation. Read-only — decisions are recorded in `AI Exception Review`. |
-| Evidence | The evidence behind each outcome: the matching rule and its notes, supporting-document facts with their quotes and locations, and reviewer decisions. |
+| Level | Sheet | Purpose |
+|---|---|---|
+| 1 Executive | **Executive Dashboard** | Opens first. Four workflow statuses (Processing, Financial Control, Exception Review, Posting), KPI cards, cash application by currency, match vs. review status, control center, management attention, charts and navigation. |
+| 1 Executive | **AR Aging & Customer Risk** | Remaining AR aged from Due Date as of the Reporting As-of Date, per currency; customer follow-up priority (operational, not a credit rating). |
+| 2 Operational | **Exception Analysis** | Exceptions by category and currency, top drivers, high-priority items, confirmed vs. AI-suggested root causes. |
+| 2 Operational | **Action & Review Queue** | Prioritized work queue; facts and AI suggestions in separate columns. Read-only — decisions are recorded in `AI Exception Review`. |
+| 2 Operational | **Cash Application Results** | Every receipt with its cash disposition and three independent statuses (match, review, posting). |
+| 2 Operational | Reconciled Open AR | AR ledger after the run (system of record). |
+| 3 Controls & Audit | **Control Reconciliation** | Cash control, bank-to-AR, AR roll-forward per currency; duplicate and data quality checks; PASS / FAIL / WARNING / N/A. |
+| 3 Controls & Audit | AI Exception Review | AI recommendations; reviewers record APPROVE / REJECT / MORE_EVIDENCE here. |
+| 3 Controls & Audit | **AI Decision & Evidence** | Matching rule, AI recommendation (labeled AI-generated), document facts and reviewer decisions per receipt. |
+| 3 Controls & Audit | Approval Records, Audit Trail, Data Quality Checks | Decisions, balance changes, input issues. |
+| 4 Supporting | Processed Bank Receipts, Unmatched Bank Receipts, Supporting Documents, Extracted Evidence, AI Exception Log, Summary | Source data plus results, and the machine-readable run summary. |
+| 4 Supporting | **Metric Definitions**, **Run Metadata & Configuration** | How every metric is calculated; run ID, as-of date, input hashes, thresholds. |
 
-The **appendix** (grey tabs) holds the system of record. The controls, the
-approval write-back and the regression baseline read these sheets, and their
-names and columns are unchanged.
-
-| Appendix sheet | Purpose |
-|---|---|
-| AI Exception Review | The AI agent's recommendation for each unmatched receipt; reviewers record APPROVE / REJECT / MORE_EVIDENCE here. |
-| Reconciled Open AR | Open AR detail with match results, applied/residual amounts, adjustments and notes. |
-| Processed Bank Receipts | Every bank receipt with match method, cash disposition (applied, unapplied, fee/rounding, held) and suggested status. |
-| Unmatched Bank Receipts | The engine's view of the receipts it routed to review, with candidate detail. |
-| Data Quality Checks | Input issues held out of matching. Empty when the source data is consistent — see [Data Quality Checks](#data-quality-checks). |
-| Supporting Documents / Extracted Evidence | Stored documents and every fact read from them. |
-| Approval Records / Audit Trail | Every reviewer decision and every balance change. |
-| AI Exception Log | Every validation repair, model error and apply outcome — see [AI Exception Log](#ai-exception-log). |
+See [Reporting Architecture](docs/reporting_architecture.md) for the design,
+the old-to-new sheet mapping and the before/after comparison, and
+[Metric Definitions](docs/metric_definitions.md) for every formula.
 
 **Confirmed matches and AI suggestions are reported separately and are never
 mixed.** A row in `Reconciled Open AR` and `Processed Bank Receipts` carries a
@@ -1049,6 +1049,8 @@ Potential use cases include:
 - [Reconciliation Logic](docs/reconciliation_logic.md) — matching rules, output statuses, match methods
 - [AI Exception Agent](docs/ai_exception_agent.md) — the agent's design, safety rules and review workflow
 - [Free and Open-Source Model Backends](docs/local_models.md) — running the agent on a free local model
+- [Reporting Architecture](docs/reporting_architecture.md) — enterprise report design, sheet mapping, before/after, limitations
+- [Metric Definitions](docs/metric_definitions.md) — definition, source, formula, denominator and currency treatment of every metric
 - [Evidence-Based Exception Resolution](docs/evidence_resolution.md) — documents, extraction, validation, review, controls, demo, limitations
 - [Data Dictionary](docs/data_dictionary.md) — every input and output column
 - [Scenario Coverage](docs/scenario_coverage.md) — S01–S40 scenario reference and measured baseline

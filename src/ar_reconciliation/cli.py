@@ -14,7 +14,7 @@ from pathlib import Path
 
 from ar_reconciliation.config import AR_FILE, BANK_FILE, RESULT_FILE
 
-__all__ = ["reconcile_main", "agent_main", "evidence_main"]
+__all__ = ["reconcile_main", "agent_main", "evidence_main", "print_currency_totals"]
 
 
 def reconcile_main(argv: list[str] | None = None) -> int:
@@ -38,17 +38,25 @@ def reconcile_main(argv: list[str] | None = None) -> int:
         verbose=not args.quiet,
     )
     if not args.quiet:
-        print()
-        print(
-            f"Reconciled AR applied amount  : "
-            f"{result.reconciled_ar_total_cents / 100:,.2f}"
-        )
-        print(
-            f"Reconciled bank applied amount: "
-            f"{result.reconciled_bank_total_cents / 100:,.2f}"
-        )
-        print(f"Control difference            : {result.control_difference:,.2f}")
+        print_currency_totals(result)
     return 0
+
+
+def print_currency_totals(result) -> None:
+    """Applied cash and control differences per currency (never a mixed total)."""
+    controls = getattr(result, "controls", None)
+    print()
+    if controls is None or not controls.by_currency:
+        print(f"Control difference            : {result.control_difference:,.2f}")
+        return
+    print("Applied cash and controls by currency (amounts are never added across currencies):")
+    for currency, sub in sorted(controls.by_currency.items()):
+        print(
+            f"  {currency}: applied {sub.applied_cents / 100:,.2f} | AR applied "
+            f"{sub.ar_applied_cents / 100:,.2f} | cash control diff "
+            f"{sub.cash_difference_cents / 100:,.2f} | roll-forward diff "
+            f"{sub.rollforward_difference_cents / 100:,.2f}"
+        )
 
 
 def agent_main(argv: list[str] | None = None) -> int:

@@ -70,7 +70,17 @@ def load_data() -> dict[str, object]:
 
     review = pd.read_excel(RESULT_FILE, sheet_name="AI Exception Review")
 
+    # Per-currency figures from the report layer: amounts in different
+    # currencies are never added together.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    from ar_reconciliation.reporting.builder import build_report_model
+
+    sheets = {name: pd.read_excel(excel, name) for name in excel.sheet_names}
+    model = build_report_model(sheets)
+
     return {
+        "model": model,
+        "ar_rows": len(sheets.get("Reconciled Open AR", [])),
         "metrics": metrics,
         "exception_types": review["AI Exception Type"].value_counts(),
         "actions": review["Recommended Action"].value_counts(),
@@ -160,27 +170,35 @@ def draw_results(path: Path, data: dict[str, object]) -> None:
     """What one run of the engine produced."""
     metrics = data["metrics"]
 
+    model = data["model"]
+    m = model.metrics
+
     fig, axes = plt.subplots(1, 3, figsize=(14, 5.4), dpi=110)
-    fig.subplots_adjust(left=0.045, right=0.985, top=0.80, bottom=0.14, wspace=0.30)
+    fig.subplots_adjust(left=0.10, right=0.985, top=0.80, bottom=0.14, wspace=0.42)
 
     fig.text(0.045, 0.93, "One run of the reconciliation engine",
              fontsize=17, fontweight="bold", color="#ffffff")
     fig.text(0.045, 0.885,
-             "200 bank receipts against 191 open AR rows - the control totals balance to the cent",
+             f"{m.total_receipts} bank receipts against {data['ar_rows']} open AR rows - "
+             f"controls {model.control_status.lower()} in every currency",
              fontsize=11.5, color=MUTED)
 
-    # -- Panel 1: receipt funnel
+    # -- Panel 1: receipts by match status (mutually exclusive)
     ax = axes[0]
-    labels = ["Matched", "Pending review", "Exception"]
-    values = [136, 67, 64]
-    colors = [GREEN, AMBER, PINK]
+    statuses = [s for s in ("Fully Matched", "Partially Matched", "Unmatched", "Refund / Reversal",
+                            "Previously Reconciled") if m.match_counts.get(s)]
+    labels = statuses
+    values = [m.match_counts[s] for s in statuses]
+    palette = {"Fully Matched": GREEN, "Partially Matched": AMBER, "Unmatched": PINK,
+               "Refund / Reversal": MUTED, "Previously Reconciled": MUTED}
+    colors = [palette[s] for s in statuses]
     bars = ax.barh(labels[::-1], values[::-1], color=colors[::-1], height=0.55)
     for bar, value in zip(bars, values[::-1]):
         ax.text(value + 3, bar.get_y() + bar.get_height() / 2, str(value),
                 va="center", fontsize=12, fontweight="bold", color=TEXT)
-    ax.set_title("Bank receipts by outcome", fontsize=13, color=TEXT,
+    ax.set_title("Bank receipts by match status", fontsize=13, color=TEXT,
                  fontweight="bold", pad=12)
-    ax.set_xlim(0, 165)
+    ax.set_xlim(0, max(values) * 1.25 if values else 1)
     ax.spines[["top", "right", "left"]].set_visible(False)
     ax.tick_params(axis="y", length=0, labelsize=11)
     ax.set_xlabel("receipts", fontsize=10, color=MUTED)
@@ -201,26 +219,33 @@ def draw_results(path: Path, data: dict[str, object]) -> None:
     ax.tick_params(axis="y", length=0, labelsize=10)
     ax.set_xlabel("receipts", fontsize=10, color=MUTED)
 
-    # -- Panel 3: control totals
+    # -- Panel 3: control results, per currency (never a mixed-currency total)
     ax = axes[2]
     ax.axis("off")
+    model = data["model"]
+    m = model.metrics
     rows = [
-        ("Matched bank receipts", "136", GREEN),
-        ("Matched AR invoice rows", "158", GREEN),
-        ("Unmatched / exception receipts", "64", AMBER),
-        ("AR applied amount", "$709,365.05", BLUE),
-        ("Bank applied amount", "$709,365.05", BLUE),
-        ("Control difference", "$0.00", GREEN),
+        ("Matched bank receipts", f"{m.matched_receipts:,}", GREEN),
+        ("Invoices with cash applied", f"{m.invoices_with_cash:,}", GREEN),
+        ("Unmatched / refund receipts",
+         f"{m.match_counts['Unmatched'] + m.match_counts['Refund / Reversal']:,}", AMBER),
     ]
+    for _, cash_row in m.cash_by_currency.iterrows():
+        rows.append((f"Applied to AR ({cash_row['Currency']})", f"{cash_row['Applied to AR'] / 100:,.2f}", BLUE))
+    amount_controls = model.controls[model.controls["_unit"] == "amount"]
+    worst = int(amount_controls["Variance"].abs().max()) if not amount_controls.empty else 0
+    rows.append(("Max control variance", f"{worst / 100:,.2f}",
+                 GREEN if worst == 0 else AMBER))
     ax.add_patch(FancyBboxPatch(
         (0.02, 0.06), 0.96, 0.88, boxstyle="round,pad=0,rounding_size=0.02",
         linewidth=1.3, edgecolor="#2b4a6b", facecolor=CARD,
         transform=ax.transAxes,
     ))
-    ax.text(0.5, 0.885, "Control totals", transform=ax.transAxes,
+    ax.text(0.5, 0.885, "Controls by currency", transform=ax.transAxes,
             fontsize=13, fontweight="bold", color=TEXT, ha="center")
+    step = min(0.125, 0.66 / max(len(rows) - 1, 1))
     for i, (label, value, color) in enumerate(rows):
-        y = 0.76 - i * 0.125
+        y = 0.76 - i * step
         ax.text(0.09, y, label, transform=ax.transAxes, fontsize=10.5,
                 color=MUTED, va="center")
         ax.text(0.91, y, value, transform=ax.transAxes, fontsize=12.5,
