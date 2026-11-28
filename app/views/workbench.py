@@ -26,6 +26,9 @@ analysed = {}
 if not review.empty:
     analysed = dict(zip(review["Bank Transaction ID"].astype(object).fillna("").astype(str), review["Analysed By"].astype(object).fillna("").astype(str)))
 model_errors = set(log.loc[log["Outcome"] == "Model Error", "Bank Transaction ID"].astype(object).fillna("").astype(str)) if not log.empty else set()
+bank_sheet = services.sheets()["Processed Bank Receipts"]
+evidence_source = dict(zip(bank_sheet["Bank Transaction ID"].astype(str),
+                           bank_sheet.get("Evidence Source", pd.Series([""] * len(bank_sheet))).astype(object).fillna("")))
 
 
 engine_matched = set(exceptions.loc[exceptions["Match Status"].isin(["Fully Matched", "Partially Matched"]),
@@ -61,8 +64,9 @@ queue = pd.DataFrame({
     "Unresolved Amount": exceptions["unresolved_cents"] / 100,
     "Exception Category": exceptions["Exception Category"],
     "AI Investigation": [ai_status(t) for t in exceptions["Bank Receipt ID"]],
-    "Evidence": ["Available" if r != "No supporting document provided" else "Missing"
-                 for r in exceptions["Supporting Evidence Reference"]],
+    "Evidence": ["Available" if r != "No supporting document provided" or evidence_source.get(t) else "Missing"
+                 for t, r in zip(exceptions["Bank Receipt ID"], exceptions["Supporting Evidence Reference"])],
+    "Evidence Source": [evidence_source.get(t) or "None" for t in exceptions["Bank Receipt ID"]],
     "Financial Validation": [validation_status(t) for t in exceptions["Bank Receipt ID"]],
     "Review Status": exceptions["Review Status"],
     "Required Action": [policies[t].required_action if t in policies else a

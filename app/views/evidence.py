@@ -54,6 +54,32 @@ with sample:
             state.flash("Synthetic sample documents stored and linked.", "info")
             st.rerun()
 
+with st.container(border=True):
+    st.markdown("### Payment Emails (Read-Only Sync)")
+    m1, m2 = st.columns([3, 2])
+    with m1:
+        st.caption("Emails are synced incrementally (only new messages), deduplicated by content and parsed once. "
+                   "Their facts are evidence for review and the AI agent; they never trigger an automatic match.")
+        gmail_ok, gmail_text = services.gmail_status()
+        c.kv([("Synthetic demo mailbox", "Available (no credentials needed)"), ("Gmail", gmail_text)])
+    with m2:
+        if st.button("Sync Demo Mailbox", use_container_width=True, disabled=st.session_state.busy):
+            ok, message, _ = services.sync_mail("local")
+            state.flash(message, "success" if ok else "error")
+            st.rerun()
+        if st.button("Sync Gmail (Read-Only)", use_container_width=True, disabled=not gmail_ok,
+                     help="Requires the optional Google client libraries and an OAuth client secret; see the README."):
+            ok, message, _ = services.sync_mail("gmail")
+            state.flash(message, "success" if ok else "error")
+            st.rerun()
+    records = st.session_state.get("mail_records")
+    if records is not None and not records.empty:
+        st.dataframe(records.drop(columns=["Document ID", "Message ID"], errors="ignore"), hide_index=True,
+                     use_container_width=True, column_config={
+                         "Payment Amount": c.money_col("Payment Amount"),
+                         "Deduction Amount": c.money_col("Deduction Amount"),
+                         "Deduction Reason": st.column_config.TextColumn(width="large")})
+
 st.markdown("### Document Library")
 if docs.empty:
     c.empty_state("No documents have been uploaded in this session.")

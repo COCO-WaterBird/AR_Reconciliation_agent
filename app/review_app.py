@@ -46,6 +46,7 @@ _HERE = Path(__file__).parent / "views"
 pages = {
     "Workspace": [
         st.Page(str(_HERE / "overview.py"), title="Overview", icon=":material/dashboard:", default=True),
+        st.Page(str(_HERE / "enrichment.py"), title="Enrichment Impact", icon=":material/insights:"),
         st.Page(str(_HERE / "data_import.py"), title="Data Import", icon=":material/upload_file:"),
         st.Page(str(_HERE / "reconciliation.py"), title="Reconciliation", icon=":material/account_balance:"),
         st.Page(str(_HERE / "workbench.py"), title="Exception Workbench", icon=":material/rule:"),
