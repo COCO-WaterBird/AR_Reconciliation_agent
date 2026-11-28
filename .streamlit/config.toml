@@ -1,0 +1,27 @@
+# Enterprise theme for the AR Intelligence review application.
+[theme]
+base = "light"
+primaryColor = "#287E86"
+backgroundColor = "#F5F7FA"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#1F2937"
+font = "sans serif"
+borderColor = "#E2E8F0"
+showWidgetBorder = true
+baseRadius = "0.5rem"
+
+[theme.sidebar]
+backgroundColor = "#17365D"
+textColor = "#E5EDF5"
+secondaryBackgroundColor = "#1F4675"
+
+[client]
+toolbarMode = "minimal"
+showErrorDetails = "none"
+
+[browser]
+gatherUsageStats = false
+
+[server]
+# Matches the document store's 10 MB limit per file.
+maxUploadSize = 10

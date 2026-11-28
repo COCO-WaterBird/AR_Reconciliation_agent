@@ -26,7 +26,7 @@ dev = ["pytest>=8.0"]
 # Reading PDF supporting documents (contracts, remittance advice).
 evidence = ["pypdf>=4.0"]
 # The single-page review UI (app/review_app.py).
-ui = ["streamlit>=1.30"]
+ui = ["streamlit>=1.50", "plotly>=5.0"]
 
 [project.scripts]
 ar-reconcile = "ar_reconciliation.cli:reconcile_main"

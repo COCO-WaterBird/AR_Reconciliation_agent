@@ -137,8 +137,8 @@ def _write_sheets(result_path: Path, sheets: dict[str, pd.DataFrame]) -> None:
     from ar_reconciliation.io.report_views import refresh_report_views
     from ar_reconciliation.io.workbook import apply_workbook_formatting
 
-    refresh_report_views(result_path)
     apply_workbook_formatting(result_path)
+    refresh_report_views(result_path)
 
 
 def _read_sheet(result_path: Path, name: str, columns: list[str]) -> pd.DataFrame:
@@ -158,9 +158,15 @@ def run_analysis(
     evidence_dir: Path | None = None,
     llm_extract: bool = False,
     backend_override: Any | None = None,
+    transaction_ids: list[str] | None = None,
     **llm_options: Any,
 ) -> AnalysisOutcome:
-    """Analyse the receipts in Needs Review and write the review sheets."""
+    """
+    Analyse the receipts in Needs Review and write the review sheets.
+
+    With ``transaction_ids`` only those receipts are analysed; their rows
+    replace the existing ones and every other row (and its decision) is kept.
+    """
     from ar_reconciliation.agent.exception_agent import analyse_exceptions, write_review_sheet
 
     store = _store(evidence_dir)
@@ -172,14 +178,41 @@ def run_analysis(
         llm_extract=llm_extract,
         evidence_rows=evidence_rows,
         backend_override=backend_override,
+        transaction_ids=transaction_ids,
         **llm_options,
     )
     evidence_df = pd.DataFrame(evidence_rows, columns=EVIDENCE_COLUMNS)
+    if transaction_ids:
+        review_df, log_df, evidence_df = _merge_partial(
+            Path(result_path), review_df, log_df, evidence_df, transaction_ids
+        )
     docs_df = documents_frame(store)
     if not review_df.empty:
         write_review_sheet(Path(result_path), review_df, log_df)
         _write_sheets(Path(result_path), {DOCUMENTS_SHEET: docs_df, EVIDENCE_SHEET: evidence_df})
     return AnalysisOutcome(review_df, log_df, evidence_df, docs_df, backend)
+
+
+def _merge_partial(result_path: Path, review_df: pd.DataFrame, log_df: pd.DataFrame,
+                   evidence_df: pd.DataFrame, transaction_ids: list[str]):
+    """Replace only the analysed receipts' rows in the existing sheets."""
+    from ar_reconciliation.config import REVIEW_LOG_SHEET as LOG
+
+    keys = {normalize_key(t) for t in transaction_ids}
+
+    def merged(sheet: str, new: pd.DataFrame, columns: list[str] | None = None) -> pd.DataFrame:
+        old = _read_sheet(result_path, sheet, columns or list(new.columns))
+        if old.empty or "Bank Transaction ID" not in old.columns:
+            return new
+        keep = old[~old["Bank Transaction ID"].apply(normalize_key).isin(keys)]
+        return pd.concat([keep, new], ignore_index=True)
+
+    review = merged(REVIEW_SHEET, review_df)
+    return (
+        review,
+        merged(LOG, log_df, ["Bank Transaction ID", "Outcome", "Detail"]),
+        merged(EVIDENCE_SHEET, evidence_df, EVIDENCE_COLUMNS),
+    )
 
 
 def record_decision(

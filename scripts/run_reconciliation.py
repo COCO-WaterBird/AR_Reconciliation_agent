@@ -61,10 +61,9 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if not args.quiet:
-        print()
-        print(f"Reconciled AR applied amount  : {result.reconciled_ar_total_cents / 100:,.2f}")
-        print(f"Reconciled bank applied amount: {result.reconciled_bank_total_cents / 100:,.2f}")
-        print(f"Control difference            : {result.control_difference:,.2f}")
+        from ar_reconciliation.cli import print_currency_totals
+
+        print_currency_totals(result)
 
     return 0
 

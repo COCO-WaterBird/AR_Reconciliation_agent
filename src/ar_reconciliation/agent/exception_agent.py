@@ -331,6 +331,21 @@ def apply_approved_recommendations(
 
         # --- Re-validate against the AR as it stands now ---------------
         context = build_context(bank_row, bank_row, ar, set())
+
+        # Deterministic financial policy first: a hold-only scenario or a
+        # restricted invoice cannot be applied by an approval, whatever the
+        # recommendation cell says.
+        from ar_reconciliation.agent.policy import evaluate_policy
+
+        policy = evaluate_policy(context, row)
+        if policy.blocking_reasons:
+            record(
+                txn_id,
+                "Rejected",
+                "Blocked by financial policy: " + "; ".join(policy.blocking_reasons)
+                + f" Required action: {policy.required_action}.",
+            )
+            continue
         pool = {c.invoice_number.upper(): c for c in context.candidates}
         outside_pool = [i for i in invoices if i.upper() not in pool]
         if outside_pool:
@@ -542,6 +557,16 @@ def _apply_resolution(
         if not evidence.has_documents:
             evidence = None
     context = build_context(bank_row, bank_row, ar, set(), evidence=evidence)
+
+    from ar_reconciliation.agent.policy import evaluate_policy
+
+    policy = evaluate_policy(context, row, resolution_status="Valid", evidence_sufficiency="Sufficient")
+    hold_rules = [r for r in policy.rules if r.result == "FAIL" and r.rule_id in {"FP-02", "FP-03"}]
+    if hold_rules:
+        record(txn_id, "Rejected", "Blocked by financial policy: "
+               + "; ".join(f"{r.control}: {r.explanation}" for r in hold_rules)
+               + f" Required action: {policy.required_action}.")
+        return
 
     checked = validate_resolution(
         {
@@ -777,6 +802,7 @@ def analyse_exceptions(
     llm_extract: bool = False,
     evidence_rows: list[dict[str, Any]] | None = None,
     backend_override: Any | None = None,
+    transaction_ids: Sequence[str] | None = None,
 ) -> tuple[
     pd.DataFrame,
     pd.DataFrame,
@@ -807,6 +833,11 @@ def analyse_exceptions(
     unmatched_df = pd.read_excel(result_path, sheet_name="Unmatched Bank Receipts")
     ar_df = pd.read_excel(result_path, sheet_name="Reconciled Open AR")
 
+    if transaction_ids:
+        wanted = {normalize_key(t) for t in transaction_ids}
+        unmatched_df = unmatched_df[
+            unmatched_df[BANK_TRANSACTION_ID_COL].apply(normalize_key).isin(wanted)
+        ]
     if limit > 0:
         unmatched_df = unmatched_df.head(limit)
 
@@ -945,6 +976,9 @@ def analyse_exceptions(
             REVIEW_APPLIED_COL: "No",
         }
         review_row.update(_evidence_columns(context, resolution))
+        # The recommendation as the model (or rules) first proposed it, before
+        # the validator and the policy rules adjusted it.
+        review_row["Original AI Recommendation"] = normalize_text(raw.get("recommended_action")) or "Not Provided"
         if evidence_rows is not None and context.evidence:
             for fact in context.evidence:
                 evidence_rows.append({
@@ -1086,8 +1120,8 @@ def write_review_sheet(
         from ar_reconciliation.io.workbook import apply_workbook_formatting
     except ImportError:  # pragma: no cover - only when imported standalone
         return
-    refresh_report_views(result_path)
     apply_workbook_formatting(result_path)
+    refresh_report_views(result_path)
 
 
 def refresh_summary(
