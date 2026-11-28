@@ -28,13 +28,18 @@ env/
 # credentials.  Replace them with your own workbooks locally, but keep the
 # directory structure.
 #
-# data/output/ holds what a run produces.  It is not tracked: every run
-# rewrites the workbook, and a run on real data would otherwise put
-# customer names, invoice numbers and bank transaction IDs into version
-# control.  The folder itself is kept (.gitkeep) because the engine writes
-# into it.
+# data/output/ holds what a run produces.  The reconciled workbook is
+# committed as a sample report, so the repository shows what the agent
+# produces.  It is safe only because the sample data is synthetic.
+#
+# If you replace the sample data with real workbooks, delete the
+# "!data/output/Open_AR_Detail_Reconciled_Result.xlsx" line below so no
+# customer name, invoice number or bank transaction ID reaches version
+# control.  Every other file a run writes here (scratch copies, FAILED
+# diagnostics) stays ignored.
 data/output/*
 !data/output/.gitkeep
+!data/output/Open_AR_Detail_Reconciled_Result.xlsx
 
 # Local overrides that may hold credentials or paths.
 .env
