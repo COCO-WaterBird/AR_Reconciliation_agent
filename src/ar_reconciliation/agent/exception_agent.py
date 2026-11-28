@@ -1082,9 +1082,11 @@ def write_review_sheet(
     # The formatting helper lives in the io module; it is imported here
     # rather than duplicated, so both writers stay in step.
     try:
+        from ar_reconciliation.io.report_views import refresh_report_views
         from ar_reconciliation.io.workbook import apply_workbook_formatting
     except ImportError:  # pragma: no cover - only when imported standalone
         return
+    refresh_report_views(result_path)
     apply_workbook_formatting(result_path)
 
 

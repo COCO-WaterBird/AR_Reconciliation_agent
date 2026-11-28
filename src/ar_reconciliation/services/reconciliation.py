@@ -848,6 +848,9 @@ class ReconciliationService:
             for sheet_name, frame in preserved.items():
                 frame.to_excel(writer, index=False, sheet_name=sheet_name)
 
+        from ar_reconciliation.io.report_views import refresh_report_views
+
+        refresh_report_views(self.output_path)
         apply_workbook_formatting(self.output_path)
 
     def _write_failed_diagnostics(
