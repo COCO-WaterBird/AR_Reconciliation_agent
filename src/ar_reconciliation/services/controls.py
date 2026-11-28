@@ -22,11 +22,18 @@ Three checks, each of which can actually fail:
 
 3. **AR roll-forward**.  For every AR row::
 
-       open amount before the run - applied in this run == open amount remaining
+       open amount before the run - applied cash - approved non-cash adjustments
+           == open amount remaining
 
    The remaining balance is the engine's own working balance, which is
    reduced independently of the cumulative applied column, so an invoice
-   that was applied beyond its open amount breaks this check.
+   that was applied beyond its open amount breaks this check.  Approved
+   adjustments (early-payment discounts and customer deductions, decision
+   E1) are non-cash: they reduce AR but never enter the cash control.
+
+All three checks are also made **per currency**: a USD receipt can only be
+explained by USD AR.  The all-currency totals are shown for completeness,
+but the run is only final when every currency balances.
 
 Money is compared in integer cents throughout.
 """
@@ -49,7 +56,12 @@ from ar_reconciliation.core.schema import (
     BANK_TRANSACTION_ID_COL,
     BANK_UNAPPLIED_AMOUNT_COL,
     OUT_APPLIED_AMOUNT_COL,
+    OUT_APPROVED_ADJUSTMENT_COL,
 )
+
+#: Currency columns on the two sides (the source column names).
+_BANK_CURRENCY_COL = "Currency"
+_AR_CURRENCY_COL = "Currency"
 
 __all__ = [
     "SOURCE_RECONCILED_BANK_STATUSES",
@@ -58,6 +70,7 @@ __all__ = [
     "compute_controls",
     "compute_output_controls",
     "summary_rows",
+    "control_break_rows",
 ]
 
 #: Bank statuses meaning the receipt was already reconciled before this run.
@@ -94,9 +107,13 @@ class ControlResult:
 
     # AR roll-forward
     ar_opening_cents: int = 0
+    ar_adjustment_cents: int = 0
     ar_remaining_cents: int = 0
     rollforward_difference_cents: int = 0
     rollforward_breaks: list[str] = field(default_factory=list)
+
+    # The same controls for each currency on its own.
+    by_currency: dict[str, "ControlResult"] = field(default_factory=dict)
 
     @property
     def balanced(self) -> bool:
@@ -106,7 +123,13 @@ class ControlResult:
             and self.applied_difference_cents == 0
             and self.rollforward_difference_cents == 0
             and not self.rollforward_breaks
+            and all(c.balanced for c in self.by_currency.values())
         )
+
+    @property
+    def run_status(self) -> str:
+        """FINAL when every control ties, otherwise FAILED."""
+        return "FINAL" if self.balanced else "FAILED"
 
     def describe_breaks(self) -> str:
         """A one-paragraph explanation of what does not tie."""
@@ -135,6 +158,12 @@ class ControlResult:
                     else ""
                 )
             )
+        for currency, sub in self.by_currency.items():
+            if sub.applied_difference_cents:
+                parts.append(
+                    f"{currency}: bank applied {cents_to_money(sub.applied_cents):,.2f} vs AR "
+                    f"applied {cents_to_money(sub.ar_applied_cents):,.2f}"
+                )
         return "; ".join(parts)
 
 
@@ -148,7 +177,22 @@ def compute_controls(
 
     Expects the working columns ``__gross_amount_cents`` on the bank frame and
     ``__ar_original_open_cents`` / ``__ar_open_amount_cents`` on the AR frame.
+    ``__ar_adjustment_cents`` (approved non-cash adjustments) is optional.
     """
+    result = _compute(ar_df, bank_df, invoice_col)
+    if _BANK_CURRENCY_COL in bank_df.columns and _AR_CURRENCY_COL in ar_df.columns:
+        bank_currency = bank_df[_BANK_CURRENCY_COL].apply(lambda v: normalize_text(v).upper())
+        ar_currency = ar_df[_AR_CURRENCY_COL].apply(lambda v: normalize_text(v).upper())
+        for currency in sorted((set(bank_currency) | set(ar_currency)) - {""}):
+            result.by_currency[currency] = _compute(
+                ar_df.loc[ar_currency == currency],
+                bank_df.loc[bank_currency == currency],
+                invoice_col,
+            )
+    return result
+
+
+def _compute(ar_df: pd.DataFrame, bank_df: pd.DataFrame, invoice_col: str) -> ControlResult:
     result = ControlResult()
 
     # --- 1. Cash control ------------------------------------------------
@@ -176,7 +220,7 @@ def compute_controls(
     ]
     if "__dq_reason" in bank_df.columns:
         result.unreadable_receipts = int(
-            bank_df["__dq_reason"].fillna("").astype(str).str.contains("not a readable amount").sum()
+            bank_df["__dq_reason"].astype(object).fillna("").astype(str).str.contains("not a readable amount").sum()
         )
 
     # --- 2. Bank vs AR applied cash --------------------------------------
@@ -187,9 +231,14 @@ def compute_controls(
     # --- 3. AR roll-forward ----------------------------------------------
     opening = ar_df["__ar_original_open_cents"].astype("int64")
     remaining = ar_df["__ar_open_amount_cents"].astype("int64")
-    ar_row_difference = opening - ar_applied - remaining
+    if "__ar_adjustment_cents" in ar_df.columns:
+        adjustments = ar_df["__ar_adjustment_cents"].astype("int64")
+    else:
+        adjustments = pd.Series(0, index=ar_df.index, dtype="int64")
+    ar_row_difference = opening - ar_applied - adjustments - remaining
 
     result.ar_opening_cents = int(opening.sum())
+    result.ar_adjustment_cents = int(adjustments.sum())
     result.ar_remaining_cents = int(remaining.sum())
     result.rollforward_difference_cents = int(ar_row_difference.sum())
     result.rollforward_breaks = [
@@ -209,9 +258,10 @@ def compute_output_controls(ar_df: pd.DataFrame, bank_df: pd.DataFrame) -> Contr
       * gross cents from ``Gross Receipt Amount`` (an unreadable cell counts
         as 0, as it did in the engine run);
       * opening AR from the untouched source ``Open Amount``;
-      * remaining AR as opening minus applied, floored at zero for an invoice
-        that received cash.  An invoice applied beyond its open amount
-        therefore breaks the roll-forward.
+      * approved non-cash adjustments from ``Approved Adjustment Amount``;
+      * remaining AR as opening minus applied minus adjustments, floored at
+        zero for an invoice that received cash or an adjustment.  An invoice
+        applied beyond its open amount therefore breaks the roll-forward.
     """
     from ar_reconciliation.io.integrity import parse_money_column
 
@@ -224,16 +274,22 @@ def compute_output_controls(ar_df: pd.DataFrame, bank_df: pd.DataFrame) -> Contr
     ):
         if column not in bank.columns:
             bank[column] = ""
-        bank[column] = bank[column].fillna("")
-    bank[BANK_APPLIED_AMOUNT_TOTAL_COL] = bank[BANK_APPLIED_AMOUNT_TOTAL_COL].fillna("")
+        bank[column] = bank[column].astype(object).fillna("")
+    bank[BANK_APPLIED_AMOUNT_TOTAL_COL] = bank[BANK_APPLIED_AMOUNT_TOTAL_COL].astype(object).fillna("")
     bank["__gross_amount_cents"], _ = parse_money_column(bank, BANK_GROSS_AMOUNT_COL)
 
-    ar[OUT_APPLIED_AMOUNT_COL] = ar[OUT_APPLIED_AMOUNT_COL].fillna("")
+    ar[OUT_APPLIED_AMOUNT_COL] = ar[OUT_APPLIED_AMOUNT_COL].astype(object).fillna("")
     opening, _ = parse_money_column(ar, AR_OPEN_AMOUNT_COL)
     applied = _cents(ar[OUT_APPLIED_AMOUNT_COL])
+    if OUT_APPROVED_ADJUSTMENT_COL in ar.columns:
+        adjusted = _cents(ar[OUT_APPROVED_ADJUSTMENT_COL].astype(object).fillna(""))
+    else:
+        adjusted = pd.Series(0, index=ar.index, dtype="int64")
     ar["__ar_original_open_cents"] = opening
-    ar["__ar_open_amount_cents"] = (opening - applied).where(
-        applied == 0, (opening - applied).clip(lower=0)
+    ar["__ar_adjustment_cents"] = adjusted
+    reduced = opening - applied - adjusted
+    ar["__ar_open_amount_cents"] = reduced.where(
+        (applied == 0) & (adjusted == 0), reduced.clip(lower=0)
     )
     return compute_controls(ar, bank, invoice_col=AR_INVOICE_COL)
 
@@ -241,7 +297,8 @@ def compute_output_controls(ar_df: pd.DataFrame, bank_df: pd.DataFrame) -> Contr
 def summary_rows(controls: ControlResult) -> list[list[object]]:
     """The control lines shown on the Summary sheet, as [metric, value] pairs."""
     m = cents_to_money
-    return [
+    rows: list[list[object]] = [
+        ["Run Status", controls.run_status],
         ["CASH CONTROL", ""],
         ["Total bank receipts (gross)", m(controls.receipts_gross_cents)],
         ["  Applied to AR", m(controls.applied_cents)],
@@ -254,6 +311,42 @@ def summary_rows(controls: ControlResult) -> list[list[object]]:
         ["AR ROLL-FORWARD", ""],
         ["Open AR before this run", m(controls.ar_opening_cents)],
         ["  Less: applied in this run", m(controls.ar_applied_cents)],
+        ["  Less: approved non-cash adjustments", m(controls.ar_adjustment_cents)],
         ["Open AR remaining", m(controls.ar_remaining_cents)],
         ["AR roll-forward difference", m(controls.rollforward_difference_cents)],
     ]
+    if controls.by_currency:
+        rows.append(["CONTROLS BY CURRENCY", ""])
+        for currency, sub in controls.by_currency.items():
+            rows.extend(
+                [
+                    [f"{currency} receipts (gross)", m(sub.receipts_gross_cents)],
+                    [f"{currency} applied to AR", m(sub.applied_cents)],
+                    [f"{currency} cash control difference", m(sub.cash_difference_cents)],
+                    [f"{currency} bank vs AR applied difference", m(sub.applied_difference_cents)],
+                    [f"{currency} AR roll-forward difference", m(sub.rollforward_difference_cents)],
+                ]
+            )
+    return rows
+
+
+def control_break_rows(controls: ControlResult) -> pd.DataFrame:
+    """The diagnostic rows written when a control fails (the Control Breaks sheet)."""
+    rows: list[dict[str, object]] = []
+    for txn in controls.cash_breaks:
+        rows.append({"Control": "Cash control", "Item": txn,
+                     "Detail": "Gross receipt does not equal its applied, unapplied, adjusted, "
+                               "held and skipped amounts"})
+    for invoice in controls.rollforward_breaks:
+        rows.append({"Control": "AR roll-forward", "Item": invoice,
+                     "Detail": "Opening - applied - adjustments does not equal the remaining balance"})
+    if controls.applied_difference_cents:
+        rows.append({"Control": "Bank vs AR applied", "Item": "All currencies",
+                     "Detail": controls.describe_breaks()})
+    for currency, sub in controls.by_currency.items():
+        if not sub.balanced:
+            rows.append({"Control": f"{currency} controls", "Item": currency,
+                         "Detail": sub.describe_breaks() or "Totals do not tie"})
+    if not rows:
+        rows.append({"Control": "All", "Item": "", "Detail": "All controls balance"})
+    return pd.DataFrame(rows, columns=["Control", "Item", "Detail"])

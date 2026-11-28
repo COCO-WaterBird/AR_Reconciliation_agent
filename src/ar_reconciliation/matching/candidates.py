@@ -83,17 +83,17 @@ def build_candidate_mask(
     """
     allowed_keys = {customer_key, *[k for k in alt_customer_keys if k]}
     already_matched = (
-        ar_df[OUT_MATCHED_BANK_TXN_COL].fillna("").astype(str).str.strip() != ""
+        ar_df[OUT_MATCHED_BANK_TXN_COL].astype(object).fillna("").astype(str).str.strip() != ""
     )
     fully_cleared = already_matched & (ar_df["__ar_open_amount_cents"] <= 0)
 
     if "__dq_reason" in ar_df.columns:
-        integrity_ok = ar_df["__dq_reason"].fillna("").astype(str) == ""
+        integrity_ok = ar_df["__dq_reason"].astype(object).fillna("").astype(str) == ""
     else:
         integrity_ok = pd.Series(True, index=ar_df.index)
 
-    recon = ar_df[AR_RECON_STATUS_COL].fillna("").str.strip().str.lower()
-    ar_status = ar_df[AR_STATUS_COL].fillna("").str.strip().str.lower()
+    recon = ar_df[AR_RECON_STATUS_COL].astype(object).fillna("").str.strip().str.lower()
+    ar_status = ar_df[AR_STATUS_COL].astype(object).fillna("").str.strip().str.lower()
 
     return (
         (ar_df["__customer_key"].isin(allowed_keys))

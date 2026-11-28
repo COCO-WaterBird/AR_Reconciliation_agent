@@ -55,6 +55,9 @@ The script may add or update the following columns in the processed bank receipt
 | Unapplied Amount | Cash received beyond the AR the receipt settled (an overpayment). It stays on account for review. |
 | Fee / Rounding Adjustment | Part of the gross receipt that is neither applied to AR nor unapplied cash: a bank fee deducted before AR was cleared at net, or a signed penny rounding variance. |
 | Held For Review Amount | Gross amount of a receipt that was not applied at all and is waiting in review (unmatched, ambiguous, duplicate, held by the input integrity checks). |
+| AI-Resolved Applied Amount | Cash applied by an approved evidence-based resolution. The engine's own result is `AR Applied Amount Total` minus this column. |
+| Resolution ID | The approved resolution applied to the receipt (`RES-…`). Set once; a second attempt to apply the same receipt is skipped. |
+| Supporting Documents | Document IDs (`DOC-…`) of the evidence the approved resolution relied on. |
 
 ## 2. Open_AR_Detail.xlsx
 
@@ -98,6 +101,10 @@ The script may add or update the following columns in the reconciled AR output:
 | Match Method | Method used to match the invoice, such as Memo Invoice Match or Customer Currency Amount Combination. |
 | Suggested Recon Status | Suggested status for the AR item: `Reconciled`, `Pending Review`, or `Unmatched`. The source `Reconciliation Status` column is never modified. |
 | Reconciliation Notes | Detailed explanation of the matching result. |
+| AI-Resolved Applied Amount | Cash applied to the invoice by approved evidence-based resolutions. |
+| Approved Adjustment Amount | Non-cash credit approved with a resolution: an Early Payment Discount or a Customer Deduction (decision E1). Reduces the open balance; never part of the cash control. |
+| Approved Adjustment Type | `Early Payment Discount` and/or `Customer Deduction`. |
+| Resolution ID | The approved resolution(s) applied to the invoice. |
 
 ## 3. Output Workbook
 
@@ -114,6 +121,39 @@ The automation creates a new workbook instead of overwriting the source files.
 | Summary | Key run metrics such as matched receipts, matched invoices, pending review receipts, exceptions, and data quality issue count, followed by the controls. **Cash control:** total gross receipts = applied to AR + unapplied cash + fee/rounding adjustments + held for review + already reconciled in source, checked per receipt. **AR roll-forward:** open AR before the run − applied in this run = open AR remaining, checked per invoice. The run writes nothing if either control breaks. |
 | AI Exception Review | Written by `src/ar_reconciliation/agent/`. One row per unmatched receipt with the agent's exception type, root cause, recommended action, confidence, proposed invoices and amounts, accounting treatment, proposed GL posting, explanation, and the reviewer's `Approval` decision. |
 | AI Exception Log | Written by `src/ar_reconciliation/agent/`. One row per validation repair, model error or apply outcome, so every change the agent made to a recommendation is auditable. |
+| Supporting Documents | One row per stored document: Document ID, file name, type, size, SHA-256, upload time and uploader, linked bank transactions, parse status, and whether the preserved original still matches its hash. |
+| Extracted Evidence | One row per fact read from a document: receipt, document, field (invoice, allocation, discount terms, deduction, …), value, invoice, amount, currency, location (page/line/row) and the verbatim quote. |
+| Approval Records | One row per reviewer decision processed: decision (APPROVE / REJECT / MORE_EVIDENCE), reviewer, decision timestamp, comments, approved allocations and adjustments, outcome. Every approval attempt is kept, including repeats ("Already applied"). |
+| Audit Trail | Append-only. One row per balance change: timestamp, resolution, receipt, invoice, customer, open balance before, cash applied, adjustment, open balance after, documents, reviewer. Survives a re-run of the engine. |
+| Control Breaks | Only in a `…_FAILED.xlsx` diagnostic workbook: every receipt or invoice that does not tie. |
+
+### Summary controls (evidence-based resolution)
+
+The Summary sheet starts its control block with **Run Status** (`FINAL`, or
+`FAILED` in a diagnostic workbook). The AR roll-forward reads
+`Open AR before this run − applied cash − approved non-cash adjustments = Open AR remaining`.
+The cash control, the bank-vs-AR applied check and the roll-forward are then
+repeated **per currency** (`USD …`, `CAD …`, `EUR …`); the all-currency lines are
+arithmetic totals shown for completeness. After approvals are applied, an
+**AI-ASSISTED RESOLUTION** block reports the resolutions applied, the
+AI-resolved cash, the approved adjustments and the receipts still in Needs Review.
+
+### AI Exception Review — evidence columns
+
+| Column | Description |
+|---|---|
+| Supporting Documents | The documents linked to the receipt. Blank when there are none; the row is then exactly as before. |
+| Evidence Summary | The extracted facts, one per line, with their document and location. |
+| Evidence Citations | The document lines the proposal relies on, each verified to exist in the stored document. |
+| Evidence Conflicts | Disagreements between documents (amounts, discount terms, currency). |
+| Evidence Sufficiency | `Sufficient`, `Insufficient` or `Conflicting`. |
+| Proposed Allocations | Cash per invoice, e.g. `INV-1: 1,000.00; INV-2: 300.00`. A reviewer may edit it; it is revalidated before anything is applied. |
+| Proposed Adjustments | Non-cash adjustments, e.g. `INV-2: Early Payment Discount 40.00`. |
+| Validation Result | `Valid`, `Downgraded` (an unsupported adjustment or citation was dropped), `Rejected` (a cash check failed) or `Needs Review`. |
+| Validation Notes | Why each check passed, repaired or failed. |
+| Resolution ID | Identifies the exact proposal (receipt + allocations + adjustments). |
+| Approval | `APPROVE`, `REJECT` or `MORE_EVIDENCE`. |
+| Reviewer / Decision Timestamp | Who decided, and when. |
 
 ## 4. Key Business Definitions
 
@@ -129,3 +169,6 @@ The automation creates a new workbook instead of overwriting the source files.
 | Subset-Sum Matching | Matching logic that finds whether multiple invoices add up to one bank receipt amount. |
 | Pending Review | A receipt or invoice that needs manual review before final reconciliation. |
 | Exception | A receipt or invoice that cannot be safely auto-reconciled. |
+| Supporting Document | A contract, customer email or remittance advice uploaded for a receipt in Needs Review. Stored unchanged and read-only; its content is treated as data, never as instructions. |
+| Resolution | The proposed cash allocations (and any approved non-cash adjustments) for one receipt, validated deterministically and applied only after a reviewer approves it. |
+| Third-Party Payment | A payment made by one customer for another customer's invoice. Applied only when a document names the invoice customer and a reviewer approves (decision E2). |

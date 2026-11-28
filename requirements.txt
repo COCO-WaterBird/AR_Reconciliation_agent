@@ -5,6 +5,10 @@
 pandas>=2.0
 openpyxl>=3.1
 
+# Reads PDF supporting documents (contracts, remittance advice) for the
+# evidence-based exception resolution.  Pure Python, no system packages.
+pypdf>=4.0
+
 # Only needed for the LLM backend (--backend llm). The rules backend and the
 # deterministic engine do not import it.
 openai>=1.0

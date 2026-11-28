@@ -111,6 +111,7 @@ from ar_reconciliation.rules.policies import (
 from ar_reconciliation.services.controls import (
     ControlResult,
     compute_controls,
+    control_break_rows,
     is_source_reconciled,
     summary_rows,
 )
@@ -329,7 +330,7 @@ class ReconciliationService:
         issues: list[dict[str, object]] = []
 
         if bank_df is not None and DQ_REASON_COL in bank_df.columns:
-            flagged = bank_df.loc[bank_df[DQ_REASON_COL].fillna("") != ""]
+            flagged = bank_df.loc[bank_df[DQ_REASON_COL].astype(object).fillna("") != ""]
             for _, row in flagged.iterrows():
                 issues.append(
                     {
@@ -346,7 +347,7 @@ class ReconciliationService:
                 )
 
         if DQ_REASON_COL in ar_df.columns:
-            flagged = ar_df.loc[ar_df[DQ_REASON_COL].fillna("") != ""]
+            flagged = ar_df.loc[ar_df[DQ_REASON_COL].astype(object).fillna("") != ""]
             for idx, row in flagged.iterrows():
                 issues.append(
                     {
@@ -368,12 +369,12 @@ class ReconciliationService:
 
         bad_ar_mask = (ar_df["__ar_open_amount_cents"] != 0) & (
             ar_df[AR_STATUS_COL]
-            .fillna("")
+            .astype(object).fillna("")
             .str.strip()
             .str.lower()
             .isin({"closed"})
             | ar_df[AR_RECON_STATUS_COL]
-            .fillna("")
+            .astype(object).fillna("")
             .str.strip()
             .str.lower()
             .isin({"reconciled", "matched", "closed"})
@@ -770,7 +771,7 @@ class ReconciliationService:
         # Blank means the AR row never received a reconciliation result in
         # this run.  Use an explicit status for reporting clarity.
         ar_df[OUT_SUGGESTED_RECON_STATUS_COL] = (
-            ar_df[OUT_SUGGESTED_RECON_STATUS_COL].fillna("").astype(str).str.strip()
+            ar_df[OUT_SUGGESTED_RECON_STATUS_COL].astype(object).fillna("").astype(str).str.strip()
         )
         ar_df.loc[
             ar_df[OUT_SUGGESTED_RECON_STATUS_COL] == "",
@@ -849,6 +850,44 @@ class ReconciliationService:
 
         apply_workbook_formatting(self.output_path)
 
+    def _write_failed_diagnostics(
+        self,
+        ar_df: pd.DataFrame,
+        bank_df: pd.DataFrame,
+        unmatched_bank_rows: list,
+        data_quality_rows: list,
+        controls,
+    ) -> Path:
+        """
+        Keep the evidence of a failed run without finalising it.
+
+        The result workbook is never written when a control breaks.  The
+        diagnostics go to a separate ``..._FAILED.xlsx`` file, marked FAILED,
+        with a Control Breaks sheet naming every receipt and invoice that
+        does not tie.
+        """
+        failed_path = self.output_path.with_name(f"{self.output_path.stem}_FAILED.xlsx")
+        summary_df = pd.DataFrame(
+            [["Run Status", "FAILED"], *summary_rows(controls)[1:]],
+            columns=["Metric", "Value"],
+        )
+        frames = self.build_output_frames(
+            ar_df=ar_df,
+            bank_df=bank_df,
+            unmatched_bank_rows=unmatched_bank_rows,
+            data_quality_rows=data_quality_rows,
+            summary_df=summary_df,
+        )
+        frames["Control Breaks"] = control_break_rows(controls)
+        try:
+            with pd.ExcelWriter(failed_path, engine="openpyxl") as writer:
+                for sheet_name, frame in frames.items():
+                    frame.to_excel(writer, index=False, sheet_name=sheet_name)
+            apply_workbook_formatting(failed_path)
+        except Exception:  # diagnostics must never hide the original failure
+            pass
+        return failed_path
+
     # -- The whole run -----------------------------------------------------
 
     def run(self, verbose: bool = True) -> ReconciliationResult:
@@ -880,8 +919,12 @@ class ReconciliationService:
         )
         controls = compute_controls(ar_df, bank_df, invoice_col=AR_INVOICE_COL)
         if not controls.balanced:
+            failed_path = self._write_failed_diagnostics(
+                ar_df, bank_df, unmatched_bank_rows, data_quality_rows, controls
+            )
             raise ValueError(
-                "Reconciliation controls do not balance; nothing was written. "
+                "Reconciliation controls do not balance; the result workbook was not "
+                f"written. Run status FAILED; diagnostics in {failed_path.name}. "
                 + controls.describe_breaks()
             )
 
