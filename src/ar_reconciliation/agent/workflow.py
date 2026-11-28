@@ -134,8 +134,10 @@ def _write_sheets(result_path: Path, sheets: dict[str, pd.DataFrame]) -> None:
     with pd.ExcelWriter(result_path, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
         for name, frame in sheets.items():
             frame.to_excel(writer, index=False, sheet_name=name)
+    from ar_reconciliation.io.report_views import refresh_report_views
     from ar_reconciliation.io.workbook import apply_workbook_formatting
 
+    refresh_report_views(result_path)
     apply_workbook_formatting(result_path)
 
 

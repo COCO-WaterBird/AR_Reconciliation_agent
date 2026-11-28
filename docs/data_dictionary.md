@@ -112,6 +112,18 @@ The script may add or update the following columns in the reconciled AR output:
 
 The automation creates a new workbook instead of overwriting the source files.
 
+**Report sheets (first, navy tabs).** `Summary`, `Matched`, `Unmatched`,
+`AI Suggested` and `Evidence` are rebuilt from the detail sheets below every
+time the workbook is written (decision D6). Every receipt is in exactly one of
+`Matched` (cash applied, or already reconciled in source) and `Unmatched`
+(still in Needs Review). `AI Suggested` lists proposals awaiting a decision
+and is read-only; decisions are recorded in `AI Exception Review`. `Evidence`
+has one row per piece of evidence: `Matching rule`, `Document fact` or
+`Reviewer decision`, with its source, detail, amount, location and quote.
+
+**Appendix (grey tabs).** The sheets below are the system of record and keep
+their names and columns.
+
 | Sheet Name | Description |
 |---|---|
 | Reconciled Open AR | Open AR detail after reconciliation processing. Contains updated matching, status, applied amount, residual amount, and notes. |

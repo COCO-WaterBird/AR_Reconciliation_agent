@@ -756,15 +756,33 @@ files.
 
 ### `Open_AR_Detail_Reconciled_Result.xlsx`
 
-| Sheet | Purpose |
+The workbook opens on **five report sheets** (navy tabs). They are views
+rebuilt from the detail sheets every time the workbook is written, so they
+can never disagree with the data; every receipt appears in exactly one of
+Matched and Unmatched.
+
+| Report sheet | Purpose |
 |---|---|
-| Reconciled Open AR | Open AR detail with match results, applied/residual amounts and notes. |
-| Processed Bank Receipts | Bank receipts with match method, extracted invoices and suggested status. |
-| Unmatched Bank Receipts | Receipts routed to review or exception, with the reason. |
-| Data Quality Checks | AR data quality issues found during processing. Empty when the source data is consistent — see [Data Quality Checks](#data-quality-checks). |
-| Summary | Run metrics and the AR/bank control total check. |
-| AI Exception Review | The AI agent's recommendation for each unmatched receipt, with the approval column. |
-| AI Exception Log | Every validation repair, model error and apply outcome. Empty when nothing had to be repaired — see [AI Exception Log](#ai-exception-log). |
+| Summary | Run status, counts, cash control and AR roll-forward (also per currency), AI-assisted totals. |
+| Matched | Every receipt whose cash was applied or that was already reconciled in the source: invoices, applied / unapplied / fee amounts, match method, and whether the engine or an approved AI resolution settled it. |
+| Unmatched | Every receipt still in Needs Review: amount held, memo, reason, suggested invoices, the AI's recommendation and the current decision. |
+| AI Suggested | AI proposals waiting for a decision: allocations, adjustments, validation result, evidence sufficiency, explanation. Read-only — decisions are recorded in `AI Exception Review`. |
+| Evidence | The evidence behind each outcome: the matching rule and its notes, supporting-document facts with their quotes and locations, and reviewer decisions. |
+
+The **appendix** (grey tabs) holds the system of record. The controls, the
+approval write-back and the regression baseline read these sheets, and their
+names and columns are unchanged.
+
+| Appendix sheet | Purpose |
+|---|---|
+| AI Exception Review | The AI agent's recommendation for each unmatched receipt; reviewers record APPROVE / REJECT / MORE_EVIDENCE here. |
+| Reconciled Open AR | Open AR detail with match results, applied/residual amounts, adjustments and notes. |
+| Processed Bank Receipts | Every bank receipt with match method, cash disposition (applied, unapplied, fee/rounding, held) and suggested status. |
+| Unmatched Bank Receipts | The engine's view of the receipts it routed to review, with candidate detail. |
+| Data Quality Checks | Input issues held out of matching. Empty when the source data is consistent — see [Data Quality Checks](#data-quality-checks). |
+| Supporting Documents / Extracted Evidence | Stored documents and every fact read from them. |
+| Approval Records / Audit Trail | Every reviewer decision and every balance change. |
+| AI Exception Log | Every validation repair, model error and apply outcome — see [AI Exception Log](#ai-exception-log). |
 
 **Confirmed matches and AI suggestions are reported separately and are never
 mixed.** A row in `Reconciled Open AR` and `Processed Bank Receipts` carries a
