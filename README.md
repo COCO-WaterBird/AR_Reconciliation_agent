@@ -22,6 +22,7 @@
 - [Human-in-the-Loop Approval](#human-in-the-loop-approval)
 - [Financial Policy Enforcement](#financial-policy-enforcement)
 - [AR Intelligence Review Application](#ar-intelligence-review-application)
+- [Evidence-Enriched Cash Application](#evidence-enriched-cash-application)
 - [Evidence-Based Exception Resolution](#evidence-based-exception-resolution)
 - [Output](#output)
   - [Data Quality Checks](#data-quality-checks)
@@ -50,8 +51,9 @@ operations. Finance teams often spend hours every day:
 
 This project transforms that workflow into an AI-assisted reconciliation agent.
 
-It reads a bank statement workbook and an open AR workbook, reconciles them
-against deterministic rules, and writes the results — confirmed matches, the
+It reads a bank statement workbook and an open AR workbook (optionally enriched
+with a Customer Master, a Contract and Payment Schedule, Remittance Advice and
+payment emails), reconciles them against deterministic rules, and writes the results — confirmed matches, the
 evidence behind them, and AI suggestions for the receipts it cannot settle —
 into a single Excel report for a human to review.
 
@@ -164,11 +166,12 @@ streamlit run app/review_app.py
 | Page | Purpose |
 |---|---|
 | Overview | Executive summary: workflow statuses, KPIs, match vs. review status, cash application by currency, exceptions, controls, management attention |
-| Data Import | Choose *Upload My Files* or *Use Synthetic Sample Data* (exclusive), validate, preview, run once |
+| Enrichment Impact | Baseline (bank + AR) vs. enriched run: automation rate, matching accuracy, review workload, AI usage, input status, proposed deductions |
+| Data Import | Choose *Upload My Files*, *Use Synthetic Sample Data* or *Use Synthetic Enriched Demo*; optional structured inputs; validate, preview, run once |
 | Reconciliation | Every receipt with its result; views, search, filters, CSV export, detail panel |
 | Exception Workbench | Prioritized queue with search, filters, sorting, batch investigation and export |
 | Exception Investigation | One receipt: bank transaction vs. candidate invoices, evidence, AI analysis (labeled), rule results, final policy decision, review |
-| Evidence Center | Document upload and linking; lifecycle Uploaded → Parsed → Linked → Retrieved → Cited |
+| Evidence Center | Document upload and linking; read-only mailbox sync (demo mailbox, optional Gmail); lifecycle Uploaded → Parsed → Linked → Retrieved → Cited |
 | Financial Controls | Control matrix by currency, transactions blocked by policy, overridden AI proposals |
 | Reports | Excel package and CSV extracts with period and run ID |
 | Audit History | Runs, investigations, validations, decisions and executions |
@@ -217,6 +220,16 @@ contract, email or remittance advice:
 
 See [Evidence-Based Exception Resolution](#evidence-based-exception-resolution).
 
+### Evidence-Enriched Cash Application
+
+- Optional structured inputs (Excel or CSV): Customer Master, Contract and Payment Schedule, Remittance Advice. They are validated and turned into per-receipt facts **before** matching
+- Remittance allocations and contract instalments settle receipts the bank memo alone cannot, through the same engine and controls; conflicting or ambiguous evidence always goes to review
+- Deductions stated in a remittance are proposed as Authorized or Unauthorized against the contract and never applied without a reviewer
+- Optional read-only Gmail sync (plus a synthetic local mailbox): incremental, deduplicated, parsed once; email facts feed review and the AI only
+- Measured before/after comparison: automation rate, matching accuracy, review workload and LLM calls
+
+See [Evidence-Enriched Cash Application](#evidence-enriched-cash-application).
+
 ### Financial Policy Enforcement
 
 - One deterministic policy decision per receipt (`agent/policy.py`), with rule results FP-01 to FP-10: customer identity, invoice eligibility, hold restrictions, currency, amount conservation, duplicates, evidence, adjustments, proposal validation and approval
@@ -232,7 +245,7 @@ See [Evidence-Based Exception Resolution](#evidence-based-exception-resolution).
 
 ### AR Intelligence Review Application
 
-- A multipage Streamlit application with 10 pages: Overview, Data Import, Reconciliation, Exception Workbench, Exception Investigation, Evidence Center, Financial Controls, Reports, Audit History and Settings
+- A multipage Streamlit application with 11 pages: Overview, Enrichment Impact, Data Import, Reconciliation, Exception Workbench, Exception Investigation, Evidence Center, Financial Controls, Reports, Audit History and Settings
 - Every figure comes from the backend; the UI adds no financial logic
 
 See [AR Intelligence Review Application](#ar-intelligence-review-application).
@@ -248,6 +261,9 @@ See [AR Intelligence Review Application](#ar-intelligence-review-application).
 ```mermaid
 flowchart TD
     IN["Bank Statement + Open AR (Excel)"] --> ENG["Deterministic matching engine<br/>services/reconciliation.py"]
+    STR["Optional structured inputs<br/>Customer Master, Contract Schedule,<br/>Remittance Advice"] --> ENR["Enrichment: validate, resolve,<br/>flag conflicts - enrichment/"]
+    ENR -->|facts before matching| ENG
+    MAIL["Gmail (read-only) / local mailbox"] --> EV
     ENG --> MATCH["Matched receipts<br/>result kept, no AI"]
     ENG --> NR["Needs Review"]
     DOCS["Supporting documents<br/>contracts, emails, remittances"] --> EV["Evidence: store, parse, extract facts<br/>evidence/"]
@@ -334,7 +350,9 @@ and every exception taxonomy is stated once, with the reason it has that value.
 │   │   ├── policy.py               #   Financial policy decision (FP-01 to FP-10)
 │   │   ├── workflow.py             #   Analyze, record decision, apply
 │   │   └── exception_agent.py      #   The agent, the approval write-back, its CLI
+│   ├── enrichment/                 # Structured inputs: loaders, resolution, demo pack, before/after comparison
 │   ├── evidence/                   # Supporting documents: store, parsers, extraction, samples
+│   │   └── mail/                   #   Read-only mailbox sync (local .eml folder, Gmail) and email payment records
 │   ├── reporting/                  # Enterprise report: metrics, aging, exceptions, controls, Excel
 │   ├── llm/backend.py              # OpenAI-compatible chat backend
 │   ├── services/                   # reconciliation.py, controls.py, review_rows.py
@@ -351,6 +369,7 @@ and every exception taxonomy is stated once, with the reason it has that value.
 │   ├── run_openai.py, run_local_model.py
 │   ├── manage_evidence.py          #   Store, link, extract documents; record decisions
 │   ├── make_sample_evidence.py     #   Regenerate the synthetic documents
+│   ├── make_enriched_demo.py       #   Regenerate the synthetic enriched demo pack
 │   ├── show_result.py              #   Inspect the result from the terminal
 │   ├── check_regression.py         #   Compare a run against the baseline
 │   ├── compare_runs.py             #   Compare business results of two runs
@@ -360,6 +379,7 @@ and every exception taxonomy is stated once, with the reason it has that value.
 │   ├── input/                      # Source workbooks (read-only, synthetic)
 │   ├── output/                     # Sample report from the synthetic data (committed)
 │   ├── sample/evidence/            # Synthetic supporting documents
+│   ├── sample/enriched/            # Synthetic Customer Master, contracts, remittances, mailbox, ground truth
 │   └── baseline.json               # Metrics a run must reproduce
 ├── tests/                          # pytest suite (see Testing)
 ├── docs/                           # Design notes, data dictionary, metric definitions, images
@@ -451,6 +471,16 @@ python scripts/show_result.py unmatched   # the receipts that need a human
 python scripts/show_result.py review      # what the agent recommended
 python scripts/show_result.py ar          # the reconciled AR rows
 ```
+
+Optionally, add the structured inputs and compare against the two-input baseline:
+
+```bash
+python scripts/run_reconciliation.py --enriched-demo --compare     # synthetic demo pack
+python scripts/run_reconciliation.py --customer-master cm.csv --contracts contracts.xlsx \
+    --remittance remittance.csv --compare --output result.xlsx
+```
+
+See [Evidence-Enriched Cash Application](#evidence-enriched-cash-application).
 
 ### 4. Run the AI exception agent
 
@@ -564,13 +594,16 @@ guarded by a test.
 | `tests/test_engine_edge_cases.py` | Synthetic edge cases for the engine: ambiguity, duplicates, malformed input, instalments, the cash control and AR roll-forward. |
 | `tests/test_evidence_documents.py` | Document store, PDF/email/Excel/CSV parsing, fact extraction, fabricated-fact rejection, conflicts, prompt-injection detection, masking. |
 | `tests/test_evidence_resolution.py` | Evidence-based resolution end to end on a synthetic engine run, with the rules backend and a mocked LLM: every scenario, approve/reject/more evidence, apply-once, per-currency controls, audit trail, FAILED diagnostics. |
-| `tests/test_review_app.py` | Headless run of the review UI (skipped without Streamlit). It still targets the previous single-page UI and will be rewritten for the multipage application. |
+| `tests/test_enrichment.py` | Structured inputs: loaders and validation, customer resolution, identical amounts, multi-invoice, partial, authorized and unauthorized deductions, instalments, conflicting and duplicate remittances, missing evidence, deduction decisions, the demo pack against its ground truth, the comparison. |
+| `tests/test_mail_sync.py` | Mailbox sync: incremental fetch, content dedupe, one parse per document, email payment records and conservative linking, a mocked Gmail API. |
+| `tests/test_review_app.py` | Headless AppTest runs of the multipage UI (skipped without Streamlit): the two-input workflow renders every page; the enriched demo shows the comparison, refuses to approve an unauthorized deduction and applies an authorized one with the controls still tying. |
 | `tests/test_report_views.py` | The report sheets: order, one match status per receipt, amounts tie to the detail sheets. |
 | `tests/test_enterprise_reporting.py` | Multi-currency handling, FX consolidation rules, status separation, denominators, controls per currency, aging boundaries, KPI accuracy, charts, formats, empty/large datasets, formula-injection guard. |
 
-Last full run: **286 passed** (before the multipage UI). The automated tests for
-the new review application and the policy enforcement are pending the design
-review; see [UI Implementation Status](docs/ui_implementation_status.md).
+Last full run: **312 passed**. The two-input run is unchanged by the
+enrichment work: `check_regression.py` reports *No regression: all baseline
+metrics match*, and `compare_runs.py` against a snapshot taken before the
+change reports *No business-result differences*.
 
 ### The regression baseline
 
@@ -802,6 +835,134 @@ and there is no enterprise sign-in or role-based authorization.
 
 ---
 
+## Evidence-Enriched Cash Application
+
+A bank memo often doesn't say which invoices a payment covers. The customer's
+remittance advice, the contract schedule and the customer master usually do.
+This layer reads those facts **before** matching, so the deterministic engine
+can settle what they prove. Everything else still goes to review and to the AI
+agent. The two-input workflow is unchanged when no structured file is given.
+
+```mermaid
+flowchart LR
+    CM["Customer Master"] --> L["Load + validate<br/>enrichment/loaders.py"]
+    CS["Contract and<br/>Payment Schedule"] --> L
+    RA["Remittance Advice"] --> L
+    L --> R["Per-receipt facts<br/>customer, allocations,<br/>deductions, conflicts<br/>enrichment/resolve.py"]
+    R --> E["Engine: structured allocation<br/>then memo, subset sum, partial"]
+    E -->|exact tie, no conflict| AUTO["Applied<br/>controls per currency"]
+    E -->|conflict / ambiguity / blocked scenario| REV["Review + AI agent"]
+    E -->|deduction stated| DED["Proposed Deductions<br/>Authorized / Unauthorized"]
+    DED --> HUM["Reviewer approves or rejects"]
+    MAIL["Gmail read-only /<br/>local mailbox"] --> EV["Evidence store<br/>dedupe + facts cache"]
+    EV --> REV
+```
+
+### Inputs (all optional, Excel or CSV)
+
+| Input | Required columns | Optional columns |
+|---|---|---|
+| Customer Master | `customer_id`, `customer_name` | `aliases` (`;`-separated), `parent_customer_id`, `currency`, `email_domains`, `payment_terms` |
+| Contract and Payment Schedule | `contract_id`, `customer_id`, `invoice_number`, `installment_amount` | `installment_number`, `installment_count`, `due_date`, `currency`, `allowed_deduction_codes`, `max_deduction_pct` |
+| Remittance Advice | `remittance_id`, `invoice_number`, `amount_paid` | `payment_reference`, `bank_transaction_id`, `payer_name`, `customer_id`, `payment_date`, `currency`, `deduction_amount`, `deduction_code`, `deduction_reason` |
+
+A file with a missing required column is rejected. Bad rows are reported in
+**Data Quality Checks** and are never silently dropped. The **Data Sources &
+Enrichment** sheet lists each input with its rows read and used.
+
+### Rules (business decisions G1–G4)
+
+- **G1. Deductions.** The engine applies the cash a remittance states. Any deduction goes to **Proposed Deductions**:
+  - It is marked *Authorized* (the code and limit are allowed by the contract) or *Unauthorized*.
+  - It is never applied automatically.
+  - A reviewer may approve an authorized deduction. It is then posted once as a non-cash adjustment, with an approval record and an audit event, and the AR roll-forward still ties.
+  - An unauthorized deduction cannot be approved as an adjustment. The balance stays open for a dispute.
+- **G2. What may drive an automatic match.** Only structured files, and only when:
+  - each allocation is no more than the invoice's open balance;
+  - the total equals the receipt;
+  - no other evidence conflicts;
+  - the scenario is not review-only (holds, disputes, duplicates, currency or entity issues and the like).
+
+  Facts from emails and PDFs feed review and the AI only.
+- **G3. Customer Master.** It may resolve a missing or misstated customer ID when an alias maps to exactly one customer in the receipt's currency. Parent and third-party payers still go to review.
+- **G4. Gmail.** An optional, read-only client (`gmail.readonly`, OAuth desktop flow), plus a synthetic local mailbox behind the same interface.
+
+Remittance lines are linked to a receipt in this order:
+
+1. the bank transaction ID;
+2. the payment reference;
+3. a unique payer + amount + date (±3 days).
+
+Anything looser is not linked. Duplicate lines from a second export are ignored. Two remittances that disagree send the receipt to review with the reason.
+
+### Mailbox sync
+
+```bash
+python -m pip install -e ".[gmail]"            # optional Google client libraries
+ar-evidence sync-mail --source local --folder data/sample/enriched/mailbox \
+    --customers data/sample/enriched/customer_master.csv --result result.xlsx
+ar-evidence sync-mail --source gmail --query "subject:(remittance OR payment) newer_than:30d" \
+    --credentials client_secret.json --customers customer_master.csv --result result.xlsx
+```
+
+- **Incremental.** Processed message IDs are kept in `mail_state.json`, so only new messages are fetched.
+- **Deduplicated.** Identical content is stored once (SHA-256), whatever its message ID.
+- **Cached.** Each document is parsed once (facts cache).
+- **Email payment records.** Customer by sender domain, payment reference, date, invoices, amounts, deductions and reasons. A record is linked to a receipt only on an exact payment reference, or on a unique customer + amount + date.
+- **Gmail credentials.**
+  - Create an OAuth *Desktop* client in Google Cloud, enable the Gmail API, and save the client secret as `client_secret.json`, or point `AR_GMAIL_CLIENT_SECRET` to it.
+  - The token is written to `gmail_token.json`.
+  - Both files are gitignored, and no message is ever modified or sent.
+
+### Measured before / after (synthetic enriched demo)
+
+The same bank and AR files, run with and without the structured inputs, measured with the same definitions (`python scripts/run_reconciliation.py --enriched-demo --compare`):
+
+| Metric | Baseline (Bank + AR) | Enriched |
+|---|---|---|
+| Automation rate | 68.0% | **71.0%** |
+| Receipts matched automatically | 136 | **142** |
+| Review workload (Pending Review) | 97 | **96** |
+| Receipts needing AI investigation | 64 | **58** |
+| LLM calls in the run (deterministic backend) | 0 | 0 |
+| Matching accuracy: labeled outcome agreement | 45.5% (5/11) | **100.0% (11/11)** |
+| Matching accuracy: correct automatic matches | N/A (0/0) | **100.0% (6/6)** |
+| Cash applied to AR (USD) | 557,715.05 | **588,413.80** |
+| Cash applied to AR (CAD / EUR) | 151,650.00 / 0.00 | 151,650.00 / 0.00 |
+| Deductions proposed (Authorized / Unauthorized) | 0 / 0 | 1 / 1 |
+| Financial controls | Passed | Passed |
+
+Accuracy is measured against `data/sample/enriched/expected_matches.csv`, the 11 labeled scenario receipts. That is small synthetic coverage, not a production estimate.
+
+With AI-assisted investigation on, each receipt that needs investigation is one LLM call, so six fewer receipts means six fewer calls per run.
+
+Review workload falls by only one receipt. The authorized and unauthorized deduction receipts still wait for a reviewer by design (G1).
+
+| Scenario | Receipt | Outcome |
+|---|---|---|
+| Identical invoice amounts; remittance names the invoice | BTRX-000122 | Auto-matched |
+| One payment, two invoices (one partly paid) | BTRX-000165 | Auto-matched per invoice |
+| Partial payment | BTRX-000172 | Applied; remainder open |
+| Withholding-tax deduction allowed by contract | BTRX-000158 | Cash applied; deduction Authorized, pending approval |
+| Promotional deduction not in the contract | BTRX-000194 | Cash applied; deduction Unauthorized |
+| Contract instalment 1 of 2 | BTRX-000171 | Auto-matched as an instalment |
+| Two remittances with conflicting instructions | BTRX-000123 | Review (conflict) |
+| No evidence, identical amounts | BTRX-000125 | Review (unchanged) |
+| Third-party payer | BTRX-000191 | Review |
+| Remittance for an invoice on collector hold | BTRX-000168 | Review (blocked scenario) |
+| Customer resolved by alias, no amount tie | BTRX-000188 | Review |
+| Duplicate remittance export / duplicate email | RA-1008, mailbox copy | Ignored; never applied twice |
+
+![Data Import with the enriched demo](docs/images/ui/after_20_enriched_import.png)
+
+![Enrichment Impact: baseline vs. enriched](docs/images/ui/after_21_enrichment_impact.png)
+
+![Structured evidence and a proposed deduction on the Investigation page](docs/images/ui/after_23_investigation_deduction.png)
+
+![Read-only mailbox sync in the Evidence Center](docs/images/ui/after_24_mailbox_sync.png)
+
+---
+
 ## Evidence-Based Exception Resolution
 
 ```mermaid
@@ -817,7 +978,7 @@ flowchart LR
 
 | Implemented | Not implemented (out of scope) |
 |---|---|
-| Manual upload of contracts, emails and remittance advice; read-only originals with hashes | Gmail / mailbox integration, automatic email |
+| Manual upload of contracts, emails and remittance advice; read-only originals with hashes; read-only Gmail / local mailbox sync | Outlook, sending email, EDI 820, AP portals |
 | Deterministic extraction; optional LLM extraction kept only when the quote is in the document | OCR for scanned PDFs |
 | Evidence-aware rules and LLM backends with citations and sufficiency | Vector search, multi-agent orchestration |
 | Validation: candidate pool, open balances, gross cash cap, discount terms and window, stated deductions, third-party only when documented | Automatic GL posting, ERP or bank API integration |
@@ -993,6 +1154,10 @@ same shape.
   approve / reject / request more evidence, apply-once, audit trail
 - Cash completeness and AR roll-forward controls, per currency, with FAILED
   diagnostics on a break
+- Evidence-enriched cash application: Customer Master, Contract and Payment
+  Schedule and Remittance Advice applied before matching; proposed deductions
+  with reviewer decisions; read-only Gmail and local mailbox sync; a measured
+  before/after comparison
 - Enterprise Excel reporting package (Executive Dashboard, per-currency figures,
   metric definitions, AR aging, control matrix)
 - Deterministic financial policy decision, enforced at approval
@@ -1003,10 +1168,8 @@ same shape.
 
 **Planned / not implemented**
 
-- A contract master-data table keyed by customer (payment terms, discounts,
-  instalment schedules) applied to every receipt automatically; today
-  contracts are individual documents linked to receipts
-- Mailbox / email API ingestion; today emails are uploaded as `.eml` files
+- Remittance formats beyond the documented CSV / Excel layout (EDI 820,
+  AP portals, lockbox files)
 - An FX rate source for consolidated reporting
 - A persistent, cross-session audit store
 - Enterprise sign-in and role-based approval; Escalate / Modify review actions
