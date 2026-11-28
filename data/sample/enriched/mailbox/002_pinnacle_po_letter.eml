@@ -3,15 +3,15 @@ To: ar@example-company.example
 Date: Mon, 22 Jun 2026 09:00:00 -0400
 Subject: Remittance - PO-550000
 MIME-Version: 1.0
-Content-Type: multipart/mixed; boundary="===============7917499178062727557=="
+Content-Type: multipart/mixed; boundary="==AR-SAMPLE-BOUNDARY=="
 
---===============7917499178062727557==
+--==AR-SAMPLE-BOUNDARY==
 Content-Type: text/plain; charset="utf-8"
 Content-Transfer-Encoding: 7bit
 
 Please find our remittance advice attached.
 
---===============7917499178062727557==
+--==AR-SAMPLE-BOUNDARY==
 Content-Type: application/pdf
 Content-Transfer-Encoding: base64
 Content-Disposition: attachment; filename="remittance_PO-550000.pdf"
@@ -32,4 +32,4 @@ MDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAwIG4gCjAw
 MDAwMDAxODUgMDAwMDAgbiAKMDAwMDAwMDQ2NyAwMDAwMCBuIAp0cmFpbGVyCjw8IC9TaXplIDYg
 L1Jvb3QgMSAwIFIgPj4Kc3RhcnR4cmVmCjU5MwolJUVPRgo=
 
---===============7917499178062727557==--
+--==AR-SAMPLE-BOUNDARY==--

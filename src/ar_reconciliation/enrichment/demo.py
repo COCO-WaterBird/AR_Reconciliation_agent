@@ -46,6 +46,12 @@ ALIASES = {
     "CUST-1031": "Cascade West",
 }
 PARENTS = {"CUST-1031": "CUST-1030"}
+#: Email domains used by the synthetic mailbox (sender -> customer).
+DOMAINS = {
+    "CUST-1012": "horizon-telecom.example",
+    "CUST-1014": "pinnacle-aerospace.example",
+    "CUST-1031": "cascade-west.example",
+}
 
 REMITTANCES = [
     # remittance_id, payment_reference, bank_transaction_id, payer_name, customer_id, payment_date, currency,
@@ -144,7 +150,7 @@ def write_enriched_demo(folder: Path, ar_file: Path, bank_file: Path) -> list[Pa
             customers[cid] = (normalize_text(row["Customer Name"]), normalize_text(row["Currency"]))
     rows = []
     for cid, (name, currency) in sorted(customers.items()):
-        domain = "".join(ch for ch in name.lower() if ch.isalnum())[:18] + ".example"
+        domain = DOMAINS.get(cid) or "".join(ch for ch in name.lower() if ch.isalnum())[:18] + ".example"
         rows.append((cid, name, ALIASES.get(cid, ""), PARENTS.get(cid, ""), currency, domain, "Net 30"))
     paths = [folder / "customer_master.csv", folder / "contract_schedule.csv",
              folder / "remittance_advice.csv", folder / "expected_matches.csv"]

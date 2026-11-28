@@ -27,6 +27,8 @@ dev = ["pytest>=8.0"]
 evidence = ["pypdf>=4.0"]
 # The single-page review UI (app/review_app.py).
 ui = ["streamlit>=1.50", "plotly>=5.0"]
+# Optional read-only Gmail sync of payment emails.
+gmail = ["google-api-python-client>=2.0", "google-auth-oauthlib>=1.0"]
 
 [project.scripts]
 ar-reconcile = "ar_reconciliation.cli:reconcile_main"

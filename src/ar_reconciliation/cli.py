@@ -113,6 +113,15 @@ def evidence_main(argv: list[str] | None = None) -> int:
     samples = sub.add_parser("load-samples", help="Store the synthetic demo documents")
     samples.add_argument("--folder", type=Path, default=SAMPLE_EVIDENCE_DIR)
 
+    mail = sub.add_parser("sync-mail", help="Sync payment emails (read-only) into the document store")
+    mail.add_argument("--source", choices=["local", "gmail"], default="local")
+    mail.add_argument("--folder", type=Path, default=SAMPLE_EVIDENCE_DIR.parent / "enriched" / "mailbox",
+                      help="Local mailbox folder of .eml files (local source)")
+    mail.add_argument("--query", default="subject:(payment OR remittance) newer_than:90d", help="Gmail search query")
+    mail.add_argument("--credentials", type=Path, default=None, help="Gmail OAuth client secret file")
+    mail.add_argument("--customers", type=Path, default=None, help="Customer Master (maps sender domains)")
+    mail.add_argument("--result", type=Path, default=None, help="Result workbook: link records to receipts")
+
     decide = sub.add_parser("decide", help="Record a reviewer decision in the review sheet")
     decide.add_argument("txn")
     decide.add_argument("decision", help="APPROVE, REJECT or MORE_EVIDENCE")
@@ -180,6 +189,34 @@ def evidence_main(argv: list[str] | None = None) -> int:
         for name, (_content, txns, scenario) in SAMPLE_DOCUMENTS.items():
             document, created = store.add(args.folder / name, txns, uploaded_by="demo")
             print(f"{document.doc_id}  {name:<40} -> {', '.join(txns)}  ({scenario})")
+        return 0
+    if args.command == "sync-mail":
+        import pandas as pd
+
+        from ar_reconciliation.evidence.mail import (
+            GmailSource,
+            LocalMailboxSource,
+            email_payment_records,
+            link_email_records,
+            sync_mailbox,
+        )
+
+        source = (LocalMailboxSource(args.folder) if args.source == "local"
+                  else GmailSource(args.query, credentials_path=args.credentials,
+                                   token_path=args.store / "gmail_token.json"))
+        outcome = sync_mailbox(source, store)
+        print(f"{outcome.source}: {outcome.listed} listed, {outcome.fetched} fetched, "
+              f"{outcome.new_documents} new, {outcome.duplicates} duplicate(s), {len(outcome.rejected)} rejected.")
+        customers = None
+        if args.customers:
+            from ar_reconciliation.enrichment import load_inputs
+
+            customers = load_inputs(customer_master=args.customers).customers
+        records = email_payment_records(store, customers)
+        if args.result and not records.empty:
+            records = link_email_records(store, records, pd.read_excel(args.result, sheet_name="Processed Bank Receipts"))
+        print(f"{len(records)} email payment record(s); "
+              f"{int((records['Linked Receipt'].astype(str) != '').sum()) if not records.empty else 0} linked to receipts.")
         return 0
     if args.command == "decide":
         from ar_reconciliation.agent.workflow import record_decision

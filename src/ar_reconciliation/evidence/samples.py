@@ -87,6 +87,9 @@ def make_email(
     message.set_content(body)
     for name, data, maintype, subtype in attachments:
         message.add_attachment(data, maintype=maintype, subtype=subtype, filename=name)
+    if attachments:
+        # A fixed boundary keeps generated samples byte-identical between runs.
+        message.set_boundary("==AR-SAMPLE-BOUNDARY==")
     return bytes(message)
 
 

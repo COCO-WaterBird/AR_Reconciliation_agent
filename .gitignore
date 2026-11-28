@@ -54,3 +54,8 @@ Open_AR_Detail_Reconciled_Result *.xlsx
 # reach version control.  Synthetic demo documents live in
 # data/sample/evidence/ instead.
 data/evidence/
+
+# Gmail OAuth client secret and token (read-only sync).  Never commit them.
+client_secret*.json
+gmail_token.json
+
