@@ -103,25 +103,69 @@ def check_source(role: str, name: str, data: bytes) -> FileCheck:
     return check
 
 
-def run(bank: tuple[str, bytes] | None, ar: tuple[str, bytes] | None, source: str) -> tuple[bool, str]:
+SAMPLE_SOURCES = {"Use Synthetic Sample Data", "Use Synthetic Enriched Demo"}
+STRUCTURED_KINDS = ("Customer Master", "Contract Schedule", "Remittance Advice")
+
+
+def enriched_demo_files() -> dict[str, tuple[str, bytes]]:
+    from ar_reconciliation.config import SAMPLE_DIR
+
+    demo = SAMPLE_DIR / "enriched"
+    names = {"Customer Master": "customer_master.csv", "Contract Schedule": "contract_schedule.csv",
+             "Remittance Advice": "remittance_advice.csv"}
+    return {k: (v, (demo / v).read_bytes()) for k, v in names.items()}
+
+
+def check_structured(kind: str, name: str, data: bytes):
+    """Validate one structured input with the engine's own loader."""
+    from ar_reconciliation.enrichment import load_inputs
+
+    keyword = {"Customer Master": "customer_master", "Contract Schedule": "contracts",
+               "Remittance Advice": "remittances"}[kind]
+    inputs = load_inputs(**{keyword: data}, labels={kind: name})
+    return inputs.sources[0] if inputs.sources else {}, inputs.issues
+
+
+def run(bank: tuple[str, bytes] | None, ar: tuple[str, bytes] | None, source: str,
+        structured: dict[str, tuple[str, bytes]] | None = None) -> tuple[bool, str]:
     """Run the deterministic engine once into the session workspace."""
     if st.session_state.get("busy"):
         return False, "A reconciliation is already running."
     st.session_state.busy = True
     try:
-        if source == "Use Synthetic Sample Data":
+        if source in SAMPLE_SOURCES:
             bank_path, ar_path = BANK_FILE, AR_FILE
         else:
             bank_path = state.workspace() / "bank_upload.xlsx"
             ar_path = state.workspace() / "ar_upload.xlsx"
             bank_path.write_bytes(bank[1])
             ar_path.write_bytes(ar[1])
-        result = run_reconciliation(bank_path=bank_path, ar_path=ar_path,
-                                    output_path=state.result_path(), verbose=False)
+        if source == "Use Synthetic Enriched Demo":
+            structured = enriched_demo_files()
+        expected = None
+        if structured:
+            from ar_reconciliation.enrichment import load_inputs
+            from ar_reconciliation.enrichment.comparison import run_with_comparison
+
+            keyword = {"Customer Master": "customer_master", "Contract Schedule": "contracts",
+                       "Remittance Advice": "remittances"}
+            inputs = load_inputs(**{keyword[k]: v[1] for k, v in structured.items()},
+                                 labels={k: v[0] for k, v in structured.items()})
+            if source == "Use Synthetic Enriched Demo":
+                from ar_reconciliation.config import SAMPLE_DIR
+
+                expected = SAMPLE_DIR / "enriched" / "expected_matches.csv"
+            result, _ = run_with_comparison(bank_path, ar_path, state.result_path(), inputs, expected)
+        else:
+            result = run_reconciliation(bank_path=bank_path, ar_path=ar_path,
+                                        output_path=state.result_path(), verbose=False)
+        label = {"Use Synthetic Sample Data": "Synthetic Sample Data",
+                 "Use Synthetic Enriched Demo": "Synthetic Enriched Demo"}.get(source, "Uploaded Files")
         info = {
-            "source": "Synthetic Sample Data" if source == "Use Synthetic Sample Data" else "Uploaded Files",
-            "bank_file": BANK_FILE.name if source == "Use Synthetic Sample Data" else bank[0],
-            "ar_file": AR_FILE.name if source == "Use Synthetic Sample Data" else ar[0],
+            "source": label + (" + structured inputs" if structured and source == "Upload My Files" else ""),
+            "bank_file": BANK_FILE.name if source in SAMPLE_SOURCES else bank[0],
+            "ar_file": AR_FILE.name if source in SAMPLE_SOURCES else ar[0],
+            "structured": ", ".join(f"{k}: {v[0]}" for k, v in (structured or {}).items()) or "None",
             "ran_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
             "controls_balanced": result.controls.balanced if result.controls else None,
         }
@@ -156,7 +200,8 @@ def _sheets(path: str, mtime: float) -> dict[str, pd.DataFrame]:
     excel = pd.ExcelFile(path)
     names = ["Processed Bank Receipts", "Reconciled Open AR", "Unmatched Bank Receipts", "AI Exception Review",
              "AI Exception Log", "Approval Records", "Audit Trail", "Data Quality Checks", "Summary",
-             "Supporting Documents", "Extracted Evidence"]
+             "Supporting Documents", "Extracted Evidence", "Proposed Deductions", "Data Sources & Enrichment",
+             "Enrichment Comparison"]
     return {n: pd.read_excel(excel, n) for n in names if n in excel.sheet_names}
 
 
@@ -384,3 +429,63 @@ def document_rows() -> pd.DataFrame:
             "Evidence Status": stage, "Integrity": "Verified" if doc_store.verify(d.doc_id) else "Hash Mismatch",
         })
     return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------------
+# Deductions and mailbox
+# ---------------------------------------------------------------------------
+
+def decide_deduction(deduction_id: str, decision: str, notes: str = "") -> tuple[bool, str]:
+    from ar_reconciliation.agent.deductions import record_deduction_decision
+
+    reviewer = normalize_text(st.session_state.get("reviewer"))
+    if not reviewer:
+        return False, "Enter your name as reviewer in Settings before recording a decision."
+    try:
+        record_deduction_decision(state.result_path(), deduction_id, decision, reviewer, notes)
+        return True, "Deduction decision saved. Apply approved resolutions to post it."
+    except ValueError as exc:
+        return False, str(exc)
+
+
+def gmail_status() -> tuple[bool, str]:
+    """Gmail is usable only with the optional libraries and a client secret file."""
+    try:
+        import googleapiclient  # noqa: F401
+        import google_auth_oauthlib  # noqa: F401
+    except ImportError:
+        return False, "Not Configured (optional Google client libraries are not installed)"
+    secret = os.environ.get("AR_GMAIL_CLIENT_SECRET", "client_secret.json")
+    if not Path(secret).exists():
+        return False, "Not Configured (no OAuth client secret file)"
+    return True, "Ready (read-only, gmail.readonly)"
+
+
+def sync_mail(source_kind: str) -> tuple[bool, str, pd.DataFrame]:
+    from ar_reconciliation.config import SAMPLE_DIR
+    from ar_reconciliation.enrichment import load_inputs
+    from ar_reconciliation.evidence.mail import (
+        GmailSource,
+        LocalMailboxSource,
+        email_payment_records,
+        link_email_records,
+        sync_mailbox,
+    )
+
+    doc_store = store()
+    try:
+        source = (LocalMailboxSource(SAMPLE_DIR / "enriched" / "mailbox") if source_kind == "local"
+                  else GmailSource(token_path=state.evidence_dir() / "gmail_token.json"))
+        outcome = sync_mailbox(source, doc_store)
+    except Exception as exc:  # noqa: BLE001 - shown as a plain message
+        return False, f"Mailbox sync failed: {type(exc).__name__}.", pd.DataFrame()
+    customers = load_inputs(customer_master=SAMPLE_DIR / "enriched" / "customer_master.csv").customers \
+        if source_kind == "local" else None
+    records = email_payment_records(doc_store, customers)
+    if state.has_run() and not records.empty:
+        records = link_email_records(doc_store, records, sheets()["Processed Bank Receipts"])
+    message = (f"{outcome.source}: {outcome.fetched} fetched, {outcome.new_documents} new, "
+               f"{outcome.duplicates} duplicate(s) skipped. Email facts are evidence for review and AI only.")
+    st.session_state.mail_records = records
+    return True, message, records
+

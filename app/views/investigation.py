@@ -90,7 +90,12 @@ with left:
             ("Net Amount", fmt.money(bank.get("Net Amount"), cur)),
             ("Payment Reference", fmt.text(bank.get("Bank Reference"))),
             ("Invoices in Memo", fmt.text(bank.get("Extracted Invoice Numbers"), "None")),
+            ("Evidence Source", fmt.text(bank.get("Evidence Source"), "Bank and AR only")),
         ])
+        if fmt.text(bank.get("Structured Evidence"), ""):
+            st.write("")
+            st.markdown("**Structured Evidence**")
+            st.markdown(f"<div class='muted'>{fmt.esc(bank.get('Structured Evidence'))}</div>", unsafe_allow_html=True)
         st.write("")
         st.markdown("**Remittance Details**")
         st.markdown(f"<div class='muted'>{fmt.esc(fmt.text(bank.get('Memo / Remittance Detail'), 'No remittance text'))}</div>",
@@ -148,6 +153,45 @@ with right:
                     "Due Date": c.date_col("Due Date"), "Open Amount": c.money_col("Open Amount"),
                     "Applied Amount": c.money_col("Applied Amount"),
                 })
+
+# --- Deductions proposed from structured remittance advice (G1) -----------------------------------
+deductions = services.sheets().get("Proposed Deductions")
+own = deductions[deductions["Bank Transaction ID"].astype(str) == txn] if deductions is not None and not deductions.empty else None
+if own is not None and not own.empty:
+    with st.container(border=True):
+        st.markdown("### Proposed Deductions")
+        st.caption("Stated in the customer's remittance advice and checked against the contract terms. The engine "
+                   "never applies a deduction; an authorized one becomes an adjustment only after approval.")
+        for _, d in own.iterrows():
+            cols = st.columns([3.2, 1.2, 1.3, 2.3])
+            cols[0].markdown(f"**{fmt.esc(d['Invoice Number'])}** · {fmt.esc(fmt.money(d['Deduction Amount'], d['Currency']))} · "
+                             f"{fmt.esc(d['Deduction Code'])} — {fmt.esc(fmt.text(d['Deduction Reason'], ''))}<br>"
+                             f"<span class='muted'>{fmt.esc(d['Authorization Rule'])}</span>", unsafe_allow_html=True)
+            cols[1].markdown(c.badge(d["Authorization"]), unsafe_allow_html=True)
+            decided = fmt.text(d.get("Decision"), "")
+            if decided or fmt.text(d.get("Applied"), "No") != "No":
+                applied = fmt.text(d.get("Applied"), "No")
+                cols[2].markdown(f"{c.badge(decided or 'Pending')}<br><span class='muted'>Applied: {fmt.esc(applied)}</span>",
+                                 unsafe_allow_html=True)
+                if decided and applied == "No" and cols[3].button(
+                        "Apply Decision", key=f"ded_apply_{d['Deduction ID']}", disabled=st.session_state.busy,
+                        help="Revalidates the decision and posts it once; the controls are recalculated."):
+                    ok, message, _ = services.apply_approved()
+                    state.flash(message, "success" if ok else "error")
+                    st.rerun()
+            else:
+                with cols[3]:
+                    b1, b2 = st.columns(2)
+                    if b1.button("Approve", key=f"ded_ok_{d['Deduction ID']}", type="primary",
+                                 disabled=d["Authorization"] != "Authorized" or not st.session_state.reviewer,
+                                 help="Only deductions authorized by the contract can be approved."):
+                        ok, message = services.decide_deduction(d["Deduction ID"], "APPROVE")
+                        state.flash(message, "success" if ok else "error")
+                        st.rerun()
+                    if b2.button("Reject", key=f"ded_no_{d['Deduction ID']}", disabled=not st.session_state.reviewer):
+                        ok, message = services.decide_deduction(d["Deduction ID"], "REJECT")
+                        state.flash(message, "success" if ok else "error")
+                        st.rerun()
 
 # --- Evidence / AI / Validation / Review in tabs -----------------------------------------------
 tab_ai, tab_evidence, tab_policy, tab_review = st.tabs(

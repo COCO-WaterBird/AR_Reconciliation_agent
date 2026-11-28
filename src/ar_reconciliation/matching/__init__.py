@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ar_reconciliation.matching.algorithms import (
     find_amount_combination_match,
+    find_structured_allocation_match,
     find_invoice_reference_match,
     find_partial_combination_match,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "classify_memo",
     "extract_invoice_numbers",
     "find_amount_combination_match",
+    "find_structured_allocation_match",
     "find_invoice_reference_match",
     "find_partial_combination_match",
     "find_subset_sum",

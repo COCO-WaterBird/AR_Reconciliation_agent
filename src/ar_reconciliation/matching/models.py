@@ -49,6 +49,10 @@ class MatchResult:
     note: str
     unapplied_cents: int = 0
     adjustment_cents: int = 0
+    #: Cash per invoice, aligned with ``ar_indexes``, when a structured source
+    #: (remittance advice, contract schedule) states the split.  ``None`` for
+    #: every engine-derived match, which keeps the existing allocation rule.
+    allocations: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)

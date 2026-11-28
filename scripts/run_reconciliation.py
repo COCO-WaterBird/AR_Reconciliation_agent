@@ -51,14 +51,50 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Do not print the run summary.",
     )
+    enrich = parser.add_argument_group("optional structured inputs (CSV or Excel)")
+    enrich.add_argument("--customer-master", type=Path, help="Customer Master")
+    enrich.add_argument("--contracts", type=Path, help="Contract and Payment Schedule")
+    enrich.add_argument("--remittance", type=Path, help="Remittance Advice")
+    enrich.add_argument("--enriched-demo", action="store_true",
+                        help="Use the synthetic enriched demo pack in data/sample/enriched/")
+    enrich.add_argument("--compare", action="store_true",
+                        help="Also run the baseline (bank + AR only) and write the Enrichment Comparison")
+    enrich.add_argument("--expected", type=Path, help="Ground truth for matching accuracy (expected_matches.csv)")
     args = parser.parse_args(argv)
 
-    result = run_reconciliation(
-        bank_path=args.bank,
-        ar_path=args.ar,
-        output_path=args.output,
-        verbose=not args.quiet,
-    )
+    inputs = None
+    if args.enriched_demo:
+        from ar_reconciliation.config import SAMPLE_DIR
+
+        demo = SAMPLE_DIR / "enriched"
+        args.customer_master = args.customer_master or demo / "customer_master.csv"
+        args.contracts = args.contracts or demo / "contract_schedule.csv"
+        args.remittance = args.remittance or demo / "remittance_advice.csv"
+        args.expected = args.expected or demo / "expected_matches.csv"
+    if args.customer_master or args.contracts or args.remittance:
+        from ar_reconciliation.enrichment import load_inputs
+
+        inputs = load_inputs(args.customer_master, args.contracts, args.remittance)
+        for issue in inputs.issues:
+            print(f"Data quality: {issue['Source']} {issue['File']} row {issue['Row']}: {issue['Issue']}")
+
+    if inputs is not None and args.compare:
+        from ar_reconciliation.enrichment.comparison import run_with_comparison
+
+        result, comparison = run_with_comparison(args.bank, args.ar, args.output, inputs, args.expected,
+                                                 verbose=not args.quiet)
+        if not args.quiet:
+            print("\nEnrichment comparison (baseline vs enriched):")
+            for _, row in comparison.iterrows():
+                print(f"  {row['Metric']:<50} {row['Baseline (Bank + AR)']!s:>16}  ->  {row['Enriched']!s}")
+    else:
+        result = run_reconciliation(
+            bank_path=args.bank,
+            ar_path=args.ar,
+            output_path=args.output,
+            verbose=not args.quiet,
+            enrichment_inputs=inputs,
+        )
 
     if not args.quiet:
         from ar_reconciliation.cli import print_currency_totals

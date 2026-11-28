@@ -141,6 +141,13 @@ def _write_sheets(result_path: Path, sheets: dict[str, pd.DataFrame]) -> None:
     refresh_report_views(result_path)
 
 
+def _has_sheet(result_path: Path, name: str) -> bool:
+    try:
+        return name in pd.ExcelFile(result_path).sheet_names
+    except Exception:
+        return False
+
+
 def _read_sheet(result_path: Path, name: str, columns: list[str]) -> pd.DataFrame:
     try:
         frame = pd.read_excel(result_path, sheet_name=name)
@@ -301,8 +308,11 @@ def apply_decisions(
     store = _store(evidence_dir)
     ar_df = pd.read_excel(result_path, sheet_name="Reconciled Open AR")
     result_df = pd.read_excel(result_path, sheet_name="Processed Bank Receipts")
-    review_df = pd.read_excel(result_path, sheet_name=REVIEW_SHEET)
+    review_df = _read_sheet(result_path, REVIEW_SHEET, [REVIEW_BANK_TXN_COL, REVIEW_APPROVAL_COL, REVIEW_APPLIED_COL])
     log_df = _read_sheet(result_path, REVIEW_LOG_SHEET, ["Bank Transaction ID", "Outcome", "Detail"])
+    from ar_reconciliation.agent.deductions import DEDUCTIONS_SHEET, apply_deduction_decisions
+
+    deductions_df = _read_sheet(result_path, DEDUCTIONS_SHEET, []) if _has_sheet(result_path, DEDUCTIONS_SHEET) else None
 
     outcome = ApplyOutcome()
     ar_updated, result_updated, outcome.log = apply_approved_recommendations(
@@ -314,6 +324,11 @@ def apply_decisions(
         records=outcome.records,
         audit=outcome.audit,
     )
+    if deductions_df is not None and not deductions_df.empty:
+        ar_updated, result_updated, deductions_df, deduction_log = apply_deduction_decisions(
+            ar_updated, result_updated, deductions_df, reviewer, outcome.records, outcome.audit
+        )
+        outcome.log.extend(deduction_log)
     controls = compute_output_controls(ar_updated, result_updated)
     outcome.controls = controls
     outcome.run_status = controls.run_status
@@ -383,5 +398,7 @@ def apply_decisions(
     }
     if store is not None:
         sheets[DOCUMENTS_SHEET] = documents_frame(store)
+    if deductions_df is not None:
+        sheets[DEDUCTIONS_SHEET] = deductions_df
     _write_sheets(result_path, sheets)
     return outcome

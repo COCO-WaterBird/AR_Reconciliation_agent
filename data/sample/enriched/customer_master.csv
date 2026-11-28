@@ -1,0 +1,33 @@
+customer_id,customer_name,aliases,parent_customer_id,currency,email_domains,payment_terms
+CUST-1001,ACME Manufacturing LLC,,,USD,acmemanufacturingl.example,Net 30
+CUST-1002,Northstar Retail Group Inc.,,,USD,northstarretailgro.example,Net 30
+CUST-1003,Pacific Health Systems,,,CAD,pacifichealthsyste.example,Net 30
+CUST-1004,BlueRiver Energy Inc.,,,CAD,blueriverenergyinc.example,Net 30
+CUST-1005,Vertex Electronics Corp.,,,USD,vertexelectronicsc.example,Net 30
+CUST-1006,Summit Foods USA LLC,,,CAD,summitfoodsusallc.example,Net 30
+CUST-1007,Lakeside Medical Supply,,,CAD,lakesidemedicalsup.example,Net 30
+CUST-1008,Redwood Software Ltd.,,,CAD,redwoodsoftwareltd.example,Net 30
+CUST-1009,Apex Construction Group,,,USD,apexconstructiongr.example,Net 30
+CUST-1010,Metro Auto Parts Inc.,,,CAD,metroautopartsinc.example,Net 30
+CUST-1011,Silverline Logistics LLC,,,USD,silverlinelogistic.example,Net 30
+CUST-1012,Horizon Telecom Services,,,USD,horizon-telecom.example,Net 30
+CUST-1013,Evergreen Hospitality Group,Evergreen Hospitality,,USD,evergreenhospitali.example,Net 30
+CUST-1014,Pinnacle Aerospace LLC,,,USD,pinnacle-aerospace.example,Net 30
+CUST-1015,BrightPath Education Inc.,,,USD,brightpatheducatio.example,Net 30
+CUST-1016,CloudNine Data Centers,,,USD,cloudninedatacente.example,Net 30
+CUST-1017,Keystone Pharma Distribution,,,USD,keystonepharmadist.example,Net 30
+CUST-1018,Granite State Utilities,,,USD,granitestateutilit.example,Net 30
+CUST-1019,Canyon Outdoor Brands,,,USD,canyonoutdoorbrand.example,Net 30
+CUST-1020,Maple Leaf Packaging CA,Maple Leaf Packaging;Maple Leaf Pkg,,USD,mapleleafpackaging.example,Net 30
+CUST-1021,Union Ridge Mining Co.,,,CAD,unionridgeminingco.example,Net 30
+CUST-1022,Meridian Office Supply,,,CAD,meridianofficesupp.example,Net 30
+CUST-1023,Harborview Marine Parts,,,USD,harborviewmarinepa.example,Net 30
+CUST-1024,Valley Fresh Produce LLC,,,USD,valleyfreshproduce.example,Net 30
+CUST-1025,Northeast Robotics Inc.,,,CAD,northeastroboticsi.example,Net 30
+CUST-1026,Solstice Renewable Power,,,USD,solsticerenewablep.example,Net 30
+CUST-1027,Prairie Home Goods,,,CAD,prairiehomegoods.example,Net 30
+CUST-1028,Westlake Laboratory Services,Westlake Labs;Westlake Laboratory,,USD,westlakelaboratory.example,Net 30
+CUST-1029,OmniChannel Media Group,,,USD,omnichannelmediagr.example,Net 30
+CUST-1030,Cascade Industrial Supply,,,CAD,cascadeindustrials.example,Net 30
+CUST-1031,Cascade Industrial Supply - West,Cascade West,CUST-1030,USD,cascade-west.example,Net 30
+CUST-1032,Atlas Freight Brokers,,,CAD,atlasfreightbroker.example,Net 30

@@ -40,6 +40,11 @@ reports = [
     ("Audit Trail", "Balance changes from applied resolutions.", services.sheets().get("Audit Trail", pd.DataFrame()),
      "No resolutions have been applied in this run yet."),
 ]
+for sheet, description in (("Enrichment Comparison", "Baseline (bank + AR) vs. enriched run, measured with the same definitions."),
+                           ("Proposed Deductions", "Deductions stated in remittance advice, authorization and reviewer decision."),
+                           ("Data Sources & Enrichment", "Inputs used in this run, their validation and row counts.")):
+    if sheet in services.sheets():
+        reports.append((sheet, description, services.sheets()[sheet], ""))
 st.markdown("### Report Extracts")
 for name, description, frame, limitation in reports:
     with st.container(border=True):

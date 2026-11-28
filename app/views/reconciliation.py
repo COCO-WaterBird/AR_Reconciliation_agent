@@ -48,7 +48,8 @@ if method != "All Match Methods":
     frame = frame[frame["Match Method"] == method]
 
 display = frame[["Bank Receipt ID", "Customer Name", "Receipt Date", "Currency", "Gross Receipt Amount", "Applied to AR",
-                 "Remaining Amount", "Invoices Applied", "Match Method", "Match Status", "Review Status"]].copy()
+                 "Remaining Amount", "Invoices Applied", "Match Method", "Evidence Source", "Match Status",
+                 "Review Status"]].copy()
 display["Receipt Date"] = pd.to_datetime(display["Receipt Date"], errors="coerce")
 display["Invoices Applied"] = display["Invoices Applied"].replace("", "None")
 
@@ -107,6 +108,10 @@ if rows:
         with d:
             st.markdown("**Engine Notes**")
             st.markdown(f"<div class='muted'>{fmt.esc(fmt.text(bank.get('Processing Notes')))}</div>", unsafe_allow_html=True)
+            if fmt.text(bank.get("Structured Evidence"), ""):
+                st.markdown("**Structured Evidence**")
+                st.markdown(f"<div class='muted'>{fmt.esc(fmt.text(bank.get('Evidence Source')))}: "
+                            f"{fmt.esc(bank.get('Structured Evidence'))}</div>", unsafe_allow_html=True)
         st.markdown("**Related AR Invoices (cash applied)**")
         inv = detail.applied_invoices
         if inv.empty:

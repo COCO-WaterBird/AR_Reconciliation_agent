@@ -163,12 +163,14 @@ def receipt_statuses(bank: pd.DataFrame, review: pd.DataFrame | None = None) -> 
             "Memo Invoices": text(row.get("Extracted Invoice Numbers")),
             "Processing Notes": text(row.get("Processing Notes")),
             "Resolution ID": text(row.get("Resolution ID")),
+            "Evidence Source": text(row.get("Evidence Source")) or ("Engine (bank + AR)" if match in {
+                "Fully Matched", "Partially Matched"} else ""),
         })
     columns = [
         "key", "Bank Transaction ID", "Value Date", "Customer Name", "ERP Customer ID", "Currency",
         "gross", "fees", "applied", "unapplied", "adjustment", "held", "skipped",
         "Match Status", "Review Status", "Posting Status", "Settled By", "Auto Matched",
         "Match Method", "Engine Status", "Memo", "Memo Scenario", "Memo Invoices",
-        "Processing Notes", "Resolution ID",
+        "Processing Notes", "Resolution ID", "Evidence Source",
     ]
     return pd.DataFrame(rows, columns=columns)

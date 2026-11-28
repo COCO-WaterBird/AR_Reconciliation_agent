@@ -26,6 +26,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 __all__ = [
+    "STRUCTURED_BLOCKED_SCENARIOS",
     "AMOUNT_TOLERANCE_CENTS",
     "ROUNDING_TOLERANCE_CENTS",
     "SMALL_RESIDUAL_WRITE_OFF_CENTS",
@@ -124,6 +125,29 @@ ENGINE_REVIEW_ONLY_SCENARIOS = {
     "Missing ERP Customer ID",
     "Ambiguous Invoice Reference",
 }
+
+#: Memo scenarios where structured evidence (remittance advice, contract
+#: schedule) may NOT drive an automatic match (decision G2): each needs an
+#: accounting or investigation decision that a remittance cannot settle.
+#: Scenarios whose only problem is missing or ambiguous payment detail
+#: (no memo, PO-only, ambiguous reference, partial / short payment, tax
+#: withholding, missing customer ID) are not listed and may be resolved.
+STRUCTURED_BLOCKED_SCENARIOS = frozenset(
+    {
+        "Duplicate Review",
+        "Currency Mismatch",
+        "Wrong Customer or Legal Entity",
+        "Reversal / Chargeback",
+        "Refund",
+        "FX Exception",
+        "Future-Dated Receipt",
+        "Unexpected Bank Account",
+        "Collector Hold",
+        "Dispute Payment",
+        "Credit Memo",
+        "Lockbox Batch",
+    }
+)
 
 #: Scenarios that may be applied only after a controlled fallback match:
 #:   - "Missing ERP Customer ID"  -> fall back to customer/remitter name.

@@ -61,6 +61,7 @@ REPORT_SHEETS: dict[str, int] = {
 SYSTEM_SHEETS: dict[str, int] = {
     "Reconciled Open AR": 2,
     "AI Exception Review": 3, "Approval Records": 3, "Audit Trail": 3, "Data Quality Checks": 3,
+    "Proposed Deductions": 3, "Data Sources & Enrichment": 4, "Enrichment Comparison": 1,
     "Processed Bank Receipts": 4, "Unmatched Bank Receipts": 4, "Supporting Documents": 4,
     "Extracted Evidence": 4, "AI Exception Log": 4, "Summary": 4,
 }
@@ -68,9 +69,10 @@ SYSTEM_SHEETS: dict[str, int] = {
 LEGACY_VIEW_SHEETS = ("Matched", "Unmatched", "AI Suggested", "Evidence")
 
 _ORDER = [
-    DASHBOARD, AGING,
+    DASHBOARD, "Enrichment Comparison", AGING,
     EXCEPTIONS, QUEUE, CASH, "Reconciled Open AR",
-    CONTROLS, "AI Exception Review", EVIDENCE, "Approval Records", "Audit Trail", "Data Quality Checks",
+    CONTROLS, "AI Exception Review", "Proposed Deductions", EVIDENCE, "Approval Records", "Audit Trail",
+    "Data Quality Checks", "Data Sources & Enrichment",
     "Processed Bank Receipts", "Unmatched Bank Receipts", "Supporting Documents", "Extracted Evidence",
     "AI Exception Log", "Summary", DEFINITIONS, METADATA,
 ]

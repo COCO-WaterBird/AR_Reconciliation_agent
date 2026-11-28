@@ -52,6 +52,7 @@ _UNSETTLED_METHOD_MARKERS = (
     "Overpayment",
     "Short Payment",
     "Small Residual",
+    "Deduction",
 )
 
 
@@ -105,7 +106,15 @@ def apply_match(
     ]
     total_invoice_open = sum(invoice_open_cents_list)
 
-    if close_invoice:
+    if result.allocations is not None:
+        # A structured source stated the split; it was validated against each
+        # invoice's open balance before the match was built.
+        per_invoice_applied = list(result.allocations)
+        per_invoice_residual = [
+            max(open_c - applied, 0)
+            for open_c, applied in zip(invoice_open_cents_list, per_invoice_applied)
+        ]
+    elif close_invoice:
         # Distribute result.applied_cents proportionally by each invoice open
         # amount.  The last invoice absorbs the rounding remainder so
         # SUM == result.applied_cents exactly.

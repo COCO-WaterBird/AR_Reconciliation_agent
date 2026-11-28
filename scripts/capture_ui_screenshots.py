@@ -26,6 +26,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="http://localhost:8501")
     parser.add_argument("--width", type=int, default=1512)
+    parser.add_argument("--flow", choices=["baseline", "enriched"], default="baseline",
+                        help="baseline: the two-input workflow; enriched: the synthetic enriched demo")
     args = parser.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
 
@@ -55,7 +57,7 @@ def main() -> int:
             print("captured", name)
 
         try:
-            run_flow(page, args, settle, nav, shot)
+            (run_enriched_flow if args.flow == "enriched" else run_flow)(page, args, settle, nav, shot)
         except Exception:
             page.screenshot(path=str(OUT / "capture_error.png"))
             raise
@@ -126,6 +128,39 @@ def run_flow(page, args, settle, nav, shot) -> None:
                             ("14_audit", "Audit History"), ("15_settings", "Settings")):
             nav(label)
             shot(name)
+
+
+def run_enriched_flow(page, args, settle, nav, shot) -> None:
+    """Data Import -> Synthetic Enriched Demo -> Enrichment Impact -> evidence and deductions."""
+    page.goto(args.url, wait_until="networkidle")
+    settle(4000)
+    nav("Settings")
+    page.locator("input[aria-label='Reviewer name']").fill("A. Analyst")
+    page.keyboard.press("Enter")
+    settle()
+
+    nav("Data Import")
+    page.get_by_text("Use Synthetic Enriched Demo").click()
+    settle()
+    shot("20_enriched_import")
+    page.get_by_role("button", name="Run Reconciliation").click()
+    settle(20000)
+    shot("21_enrichment_impact")
+
+    nav("Reconciliation")
+    shot("22_reconciliation_evidence_source", full=False)
+
+    nav("Exception Investigation")
+    page.get_by_role("combobox").first.click()
+    page.keyboard.type("BTRX-000158")
+    page.keyboard.press("Enter")
+    settle()
+    shot("23_investigation_deduction")
+
+    nav("Evidence Center")
+    page.get_by_role("button", name="Sync Demo Mailbox").click()
+    settle(6000)
+    shot("24_mailbox_sync")
 
 
 if __name__ == "__main__":
