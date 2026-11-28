@@ -271,3 +271,21 @@ class TestDeductionDecisions:
         apply_decisions(out)
         ar = pd.read_excel(out, sheet_name="Reconciled Open AR").iloc[0]
         assert money_to_cents(ar["Residual Amount"]) == 3000
+
+
+def test_enrichment_comparison_on_the_demo_pack(tmp_path):
+    from ar_reconciliation.enrichment.comparison import COMPARISON_SHEET, run_with_comparison
+
+    inputs = load_inputs(DEMO / "customer_master.csv", DEMO / "contract_schedule.csv", DEMO / "remittance_advice.csv")
+    out = tmp_path / "enriched.xlsx"
+    result, frame = run_with_comparison(None, None, out, inputs, DEMO / "expected_matches.csv")
+    metrics = frame.set_index("Metric")
+    before = int(metrics.loc["Receipts matched automatically", "Baseline (Bank + AR)"])
+    after = int(metrics.loc["Receipts matched automatically", "Enriched"])
+    assert after > before
+    assert int(metrics.loc["Receipts needing AI investigation", "Enriched"]) < int(
+        metrics.loc["Receipts needing AI investigation", "Baseline (Bank + AR)"])
+    assert metrics.loc["Matching accuracy - correct automatic matches", "Enriched"].startswith("100.0%")
+    assert metrics.loc["Financial controls", "Enriched"] == "Passed"
+    assert COMPARISON_SHEET in pd.ExcelFile(out).sheet_names
+    assert (tmp_path / "enriched_baseline.xlsx").exists()

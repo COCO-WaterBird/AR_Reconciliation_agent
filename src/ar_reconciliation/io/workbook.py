@@ -284,6 +284,9 @@ def apply_workbook_formatting(output_file: Path) -> None:
         "Approval Records": 2,
         "Audit Trail": 2,
         "Control Breaks": 1,
+        "Enrichment Comparison": 1,
+        "Proposed Deductions": 2,
+        "Data Sources & Enrichment": 1,
     }
 
     header_fill = PatternFill(start_color=NAVY, end_color=NAVY, fill_type="solid")
