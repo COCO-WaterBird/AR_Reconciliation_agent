@@ -301,9 +301,9 @@ class TestEndToEndRun:
         review_df, _ = analysis
 
         # The approval column is blank: no human has decided anything yet.
-        approvals = review_df[agent.REVIEW_APPROVAL_COL].fillna("").astype(str).str.strip()
+        approvals = review_df[agent.REVIEW_APPROVAL_COL].astype(object).fillna("").astype(str).str.strip()
         assert (approvals == "").all()
 
         # Every row is marked as not applied to AR.
-        applied = review_df[agent.REVIEW_APPLIED_COL].fillna("").astype(str).str.strip()
+        applied = review_df[agent.REVIEW_APPLIED_COL].astype(object).fillna("").astype(str).str.strip()
         assert set(applied.unique()) <= {"", "No"}

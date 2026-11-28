@@ -40,9 +40,9 @@ def approve(review_df: pd.DataFrame, txn_id: str) -> pd.DataFrame:
 
 
 def control_difference(ar_df: pd.DataFrame, result_df: pd.DataFrame) -> int:
-    ar_total = sum(money_to_cents(v) for v in ar_df["Applied Amount"].fillna("").tolist())
+    ar_total = sum(money_to_cents(v) for v in ar_df["Applied Amount"].astype(object).fillna("").tolist())
     bank_total = sum(
-        money_to_cents(v) for v in result_df["AR Applied Amount Total"].fillna("").tolist()
+        money_to_cents(v) for v in result_df["AR Applied Amount Total"].astype(object).fillna("").tolist()
     )
     return bank_total - ar_total
 
@@ -59,9 +59,9 @@ class TestApprovalGate:
         )
 
         assert log == []
-        assert updated_ar["Applied Amount"].fillna("").tolist() == ar_df[
+        assert updated_ar["Applied Amount"].astype(object).fillna("").tolist() == ar_df[
             "Applied Amount"
-        ].fillna("").tolist()
+        ].astype(object).fillna("").tolist()
 
     def test_rejected_approval_means_no_application(self, workbook, review_frame):
         ar_df = pd.read_excel(workbook, sheet_name="Reconciled Open AR")
@@ -75,9 +75,9 @@ class TestApprovalGate:
         )
 
         assert log == []
-        assert updated_ar["Applied Amount"].fillna("").tolist() == ar_df[
+        assert updated_ar["Applied Amount"].astype(object).fillna("").tolist() == ar_df[
             "Applied Amount"
-        ].fillna("").tolist()
+        ].astype(object).fillna("").tolist()
 
     def test_blank_approval_means_no_application(self, workbook, review_frame):
         """A reviewer who has not decided yet must not accidentally approve."""
@@ -92,9 +92,9 @@ class TestApprovalGate:
         )
 
         assert log == []
-        assert updated_ar["Applied Amount"].fillna("").tolist() == ar_df[
+        assert updated_ar["Applied Amount"].astype(object).fillna("").tolist() == ar_df[
             "Applied Amount"
-        ].fillna("").tolist()
+        ].astype(object).fillna("").tolist()
 
 
 class TestApprovedApplication:
@@ -110,7 +110,7 @@ class TestApprovedApplication:
         """
         candidates = review_frame[
             (review_frame["Recommended Action"] == "Recommend Match")
-            & (review_frame["Proposed Invoice Numbers"].fillna("").str.len() > 0)
+            & (review_frame["Proposed Invoice Numbers"].astype(object).fillna("").str.len() > 0)
             & (review_frame["Proposed Applied Amount"].fillna(0).astype(float) > 0)
         ]
         assert len(candidates) > 0, "the rules backend produced no matchable receipt"
@@ -127,9 +127,9 @@ class TestApprovedApplication:
         )
 
         assert len(log) > 0
-        assert updated_ar["Applied Amount"].fillna("").tolist() != ar_df[
+        assert updated_ar["Applied Amount"].astype(object).fillna("").tolist() != ar_df[
             "Applied Amount"
-        ].fillna("").tolist()
+        ].astype(object).fillna("").tolist()
 
     def test_control_totals_still_balance_after_applying(self, workbook, review_frame, approvable):
         """The whole point: applying an approval must not break the books."""
@@ -160,9 +160,9 @@ class TestApprovedApplication:
             result_df=first_result, ar_df=first_ar, review_df=approved
         )
 
-        assert first_ar["Applied Amount"].fillna("").tolist() == second_ar[
+        assert first_ar["Applied Amount"].astype(object).fillna("").tolist() == second_ar[
             "Applied Amount"
-        ].fillna("").tolist()
+        ].astype(object).fillna("").tolist()
         assert control_difference(second_ar, second_result) == 0
 
 
@@ -255,7 +255,7 @@ class TestApprovalRevalidation:
     def approvable_row(self, review_frame):
         rows = review_frame[
             (review_frame["Recommended Action"] == "Recommend Match")
-            & (review_frame["Proposed Invoice Numbers"].fillna("").str.len() > 0)
+            & (review_frame["Proposed Invoice Numbers"].astype(object).fillna("").str.len() > 0)
             & (review_frame["Proposed Applied Amount"].fillna(0).astype(float) > 0)
         ]
         assert len(rows) > 0
@@ -290,9 +290,9 @@ class TestApprovalRevalidation:
         )
 
         assert [entry["Outcome"] for entry in log] == ["Rejected"]
-        assert updated_ar["Applied Amount"].fillna("").tolist() == ar_df[
+        assert updated_ar["Applied Amount"].astype(object).fillna("").tolist() == ar_df[
             "Applied Amount"
-        ].fillna("").tolist()
+        ].astype(object).fillna("").tolist()
 
     def test_amount_above_the_receipt_cash_is_rejected(self, workbook, review_frame, approvable_row):
         ar_df, result_df = self._frames(workbook)
@@ -310,9 +310,9 @@ class TestApprovalRevalidation:
 
         assert [entry["Outcome"] for entry in log] == ["Rejected"]
         assert "exceeds the cash" in log[0]["Detail"]
-        assert updated_ar["Applied Amount"].fillna("").tolist() == ar_df[
+        assert updated_ar["Applied Amount"].astype(object).fillna("").tolist() == ar_df[
             "Applied Amount"
-        ].fillna("").tolist()
+        ].astype(object).fillna("").tolist()
 
     def test_all_controls_tie_after_applying(self, workbook, review_frame, approvable_row):
         from ar_reconciliation.services.controls import compute_output_controls

@@ -29,23 +29,23 @@ def test_1_clean_matches_are_reconciled_automatically(result_bank):
 
 def test_2_one_receipt_can_clear_multiple_invoices(result_ar):
     """S02: a receipt may settle more than one invoice."""
-    multi = result_ar[result_ar["Match Method"].fillna("").str.contains("Combination")]
+    multi = result_ar[result_ar["Match Method"].astype(object).fillna("").str.contains("Combination")]
     assert len(multi) > 0, "no combination match in the result"
 
     # A combination match must name more than one invoice.
-    for notes in multi["Reconciliation Notes"].fillna(""):
+    for notes in multi["Reconciliation Notes"].astype(object).fillna(""):
         assert "matched invoice(s)" in notes
 
 
 def test_3_memo_invoice_references_are_prioritized(result_bank):
     """S03: a memo that names an invoice beats generic amount matching."""
     memo_matched = result_bank[
-        result_bank["Match Method"].fillna("").str.startswith("Memo Invoice Match")
+        result_bank["Match Method"].astype(object).fillna("").str.startswith("Memo Invoice Match")
     ]
     assert len(memo_matched) > 0
 
     # Every memo match must have extracted an invoice reference.
-    assert memo_matched["Extracted Invoice Numbers"].fillna("").str.len().gt(0).all()
+    assert memo_matched["Extracted Invoice Numbers"].astype(object).fillna("").str.len().gt(0).all()
 
 
 def test_4_gross_amount_clears_ar(result_ar, result_bank):
@@ -75,7 +75,7 @@ def test_5_net_amount_reconciles_bank_cash(result_bank):
 def test_6_partial_payments_stay_open_with_a_residual(result_ar):
     """S07/S09: a partial payment leaves the invoice open."""
     partial = result_ar[
-        result_ar["Match Method"].fillna("").str.contains("Partial|Short Payment")
+        result_ar["Match Method"].astype(object).fillna("").str.contains("Partial|Short Payment")
     ]
     assert len(partial) > 0
 
@@ -113,9 +113,9 @@ def test_9_control_totals_agree(reconciled):
     ar = reconciled["Reconciled Open AR"]
     bank = reconciled["Processed Bank Receipts"]
 
-    ar_total = sum(money_to_cents(v) for v in ar["Applied Amount"].fillna("").tolist())
+    ar_total = sum(money_to_cents(v) for v in ar["Applied Amount"].astype(object).fillna("").tolist())
     bank_total = sum(
-        money_to_cents(v) for v in bank["AR Applied Amount Total"].fillna("").tolist()
+        money_to_cents(v) for v in bank["AR Applied Amount Total"].astype(object).fillna("").tolist()
     )
 
     assert ar_total == bank_total
@@ -201,7 +201,7 @@ def test_every_receipt_is_either_reconciled_or_in_review(result_bank, result_unm
     matched_pending = set(
         result_bank[
             (result_bank["Suggested Bank Status"] == "Pending Review")
-            & (result_bank["Match Method"].fillna("").str.len() > 0)
+            & (result_bank["Match Method"].astype(object).fillna("").str.len() > 0)
         ]["Bank Transaction ID"]
     )
 
@@ -223,7 +223,7 @@ def test_matched_but_pending_receipts_still_carry_a_match_method(result_bank):
     and must say so.
     """
     pending = result_bank[result_bank["Suggested Bank Status"] == "Pending Review"]
-    with_match = pending[pending["Match Method"].fillna("").str.len() > 0]
+    with_match = pending[pending["Match Method"].astype(object).fillna("").str.len() > 0]
 
     assert len(with_match) > 0
     # A pending receipt that was matched still has an applied amount.
@@ -261,7 +261,7 @@ def test_reconciled_invoices_have_no_residual(result_ar):
 def test_unmatched_rows_carry_a_reason(result_unmatched):
     """Every receipt in the review sheet explains why it is there."""
     assert len(result_unmatched) > 0
-    for reason in result_unmatched["Reason"].fillna(""):
+    for reason in result_unmatched["Reason"].astype(object).fillna(""):
         assert str(reason).strip()
 
 
