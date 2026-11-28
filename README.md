@@ -29,6 +29,7 @@
 - [Business Value](#business-value)
 - [Documentation](#documentation)
 - [Author](#author)
+- [License](#license)
 
 ---
 
@@ -1044,3 +1045,9 @@ Potential use cases include:
 MS in Computer Software Engineering
 Former Senior Accountant (Tesla)
 AI Automation Engineer | Finance Systems | Python | Power BI | SQL
+
+---
+
+## License
+
+Released under the [MIT License](LICENSE).
